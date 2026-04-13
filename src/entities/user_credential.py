@@ -1,6 +1,9 @@
-from pydantic import BaseModel, Field, validator
 from typing import Optional
+import os
+
 from fastapi import Form, HTTPException
+from pydantic import BaseModel, Field
+
 
 class Neo4jCredentials(BaseModel):
     """
@@ -14,7 +17,7 @@ class Neo4jCredentials(BaseModel):
     email: Optional[str] = Field(None, description="User email for logging")
 
     def validate_required(self) -> None:
-        """Validate that required credentials are present"""
+        """Validate that required credentials are present."""
         if not self.uri or not self.userName or not self.password:
             raise HTTPException(
                 status_code=400,
@@ -22,8 +25,7 @@ class Neo4jCredentials(BaseModel):
             )
 
     class Config:
-        """Pydantic configuration"""
-        str_strip_whitespace = True  # Automatically strip whitespace from strings
+        str_strip_whitespace = True
 
 
 async def get_neo4j_credentials(
@@ -34,25 +36,19 @@ async def get_neo4j_credentials(
     email: Optional[str] = Form(None)
 ) -> Neo4jCredentials:
     """
-    FastAPI dependency function to extract and validate Neo4j credentials from form data.
-    
-    Args:
-        uri: Neo4j database URI
-        userName: Neo4j username
-        password: Neo4j password  
-        database: Neo4j database name (optional, defaults to neo4j)
-        email: User email for logging purposes
-    
-    Returns:
-        Neo4jCredentials: Validated credentials object
-    
-    Raises:
-        HTTPException: If validation fails
+    优先读取请求表单；如果没传，则回退到环境变量。
     """
-    return Neo4jCredentials(
-        uri=uri,
-        userName=userName,
-        password=password,
-        database=database,
+    resolved_uri = uri or os.getenv("NEO4J_URI")
+    resolved_user = userName or os.getenv("NEO4J_USERNAME")
+    resolved_password = password or os.getenv("NEO4J_PASSWORD")
+    resolved_database = database or os.getenv("NEO4J_DATABASE", "neo4j")
+
+    credentials = Neo4jCredentials(
+        uri=resolved_uri,
+        userName=resolved_user,
+        password=resolved_password,
+        database=resolved_database,
         email=email
     )
+    credentials.validate_required()
+    return credentials

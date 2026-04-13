@@ -1,17 +1,54 @@
+# 环境变量（敏感信息）
 .env
+.env.*
+*.env
+
+# Python 缓存
 __pycache__/
-*.pyc
+*.py[cod]
+*.so
+*.egg-info/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 虚拟环境
 venv/
-venv_medical/
+venv_*/
+env/
+ENV/
+.venv
+
+# 项目生成目录（运行时创建）
 chunks/
 merged_files/
-
-# 备份文件
+local_model/
+models/
 *.backup
 *.bak
-*~
 
-# 其他临时文件
+# IDE 和系统文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 日志和临时文件
 *.log
 *.tmp
-.DS_Store
+*.pid
+
+# 大型模型文件（可选，如果不想提交模型权重）
+*.safetensors
+*.bin
+*.h5
+*.onnx
+
+# 其他
+*.pyc
+*.pyo
+*.pyd

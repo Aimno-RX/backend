@@ -37,7 +37,6 @@ COPY requirements.txt /code/
 RUN pip install --upgrade pip setuptools wheel && \
     pip install \
         --constraint /code/constraints.txt \
-        --extra-index-url https://download.pytorch.org/whl/cpu \
         -r /code/requirements.txt && \
     rm -rf /root/.cache/pip
 

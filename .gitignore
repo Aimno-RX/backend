@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+venv/
+venv_medical/
+chunks/
+merged_files/
+
+# 备份文件
+*.backup
+*.bak
+*~
+
+# 其他临时文件
+*.log
+*.tmp
+.DS_Store

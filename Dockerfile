@@ -7,6 +7,7 @@ ENV PORT=8000 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=300 \
     LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 
 EXPOSE 8000
@@ -35,16 +36,10 @@ COPY requirements.txt /code/
 
 RUN pip install --upgrade pip setuptools wheel && \
     pip install \
+        --constraint /code/constraints.txt \
         --extra-index-url https://download.pytorch.org/whl/cpu \
-        "torch==2.3.1+cpu" \
-        "torchvision==0.18.1+cpu" \
-        "torchaudio==2.3.1+cpu" && \
-    grep -v '^-f ' /code/constraints.txt > /tmp/constraints_clean.txt && \
-    pip install \
-        --constraint /tmp/constraints_clean.txt \
-        -r /code/requirements.txt \
-        --extra-index-url https://download.pytorch.org/whl/cpu && \
-    rm -rf /root/.cache/pip /tmp/constraints_clean.txt
+        -r /code/requirements.txt && \
+    rm -rf /root/.cache/pip
 
 RUN python -m nltk.downloader -d /usr/local/nltk_data punkt && \
     python -m nltk.downloader -d /usr/local/nltk_data averaged_perceptron_tagger && \

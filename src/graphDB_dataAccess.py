@@ -348,15 +348,29 @@ class graphDBdataAccess:
         """   
         param = {"filename_list" : filename_list, "source_types_list": source_types_list}
         community_param = {"max_level":MAX_COMMUNITY_LEVELS}
+       
+        # 先查询实际存在的文档数量
+        query_count = """
+            MATCH (d:Document)
+            WHERE d.fileName IN $filename_list AND coalesce(d.fileSource, "None") IN $source_types_list
+            RETURN count(d) as count
+        """
+        count_result = self.execute_query(query_count, param)
+        actual_count = count_result[0]['count'] if count_result else 0
+        
+        if actual_count == 0:
+            logging.warning(f"No documents found for filenames: {filename_list}, source_types: {source_types_list}")
+            return 0
+        
         if deleteEntities == "true":
             result = self.execute_query(query_to_delete_document_and_entities, param)
             _ = self.execute_query(query_to_delete_communities,community_param)
-            logging.info(f"Deleting {len(filename_list)} documents = '{filename_list}' from '{source_types_list}' from database")
+            logging.info(f"Deleting {actual_count} documents = '{filename_list}' from '{source_types_list}' from database")
         else :
             result = self.execute_query(query_to_delete_document, param)    
-            logging.info(f"Deleting {len(filename_list)} documents = '{filename_list}' from '{source_types_list}' with their entities from database")
-        return len(filename_list)
-    
+            logging.info(f"Deleting {actual_count} documents = '{filename_list}' from '{source_types_list}' with their entities from database")
+        return actual_count
+        
     def list_unconnected_nodes(self):
         query = """
         MATCH (e:!Chunk&!Document&!`__Community__`) 

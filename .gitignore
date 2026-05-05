@@ -1,54 +1,33 @@
-# 环境变量（敏感信息）
-.env
-.env.*
-*.env
-
-# Python 缓存
+# Python
 __pycache__/
 *.py[cod]
-*.so
-*.egg-info/
-*.egg
-.pytest_cache/
-.coverage
-htmlcov/
-
-# 虚拟环境
-venv/
-venv_*/
-env/
-ENV/
-.venv
-
-# 项目生成目录（运行时创建）
-chunks/
-merged_files/
-local_model/
-models/
-*.backup
-*.bak
-
-# IDE 和系统文件
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-Thumbs.db
-
-# 日志和临时文件
-*.log
-*.tmp
-*.pid
-
-# 大型模型文件（可选，如果不想提交模型权重）
-*.safetensors
-*.bin
-*.h5
-*.onnx
-
-# 其他
-*.pyc
 *.pyo
-*.pyd
+
+# Large files
+bge-small-zh-v1.5/
+*.bin
+*.model
+*.vec
+
+# Backup
+*_backup_*
+src_backup_*
+
+# Temp
+*.txt
+--*
+dockerfile
+backend-app:*
+
+# Logs & Env
+*.log
+.env
+neo4j-data/
+
+# Scripts
+deploy_fix.sh
+fix_*.py
+update_qa.py
+*_import_fix.py
+constraints.txt
+*.docx

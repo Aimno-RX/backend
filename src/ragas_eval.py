@@ -24,7 +24,14 @@ load_dotenv()
 
 ragas_embedding_model = get_value_from_env("RAGAS_EMBEDDING_MODEL","openai")
 logging.info("Loading embedding model for ragas evaluation")
-EMBEDDING_FUNCTION, _ = load_embedding_model(ragas_embedding_model)
+EMBEDDING_FUNCTION = None
+
+def _get_embedding_function():
+    """Lazy load embedding function."""
+    global EMBEDDING_FUNCTION
+    if EMBEDDING_FUNCTION is None:
+        EMBEDDING_FUNCTION, _ = load_embedding_model(ragas_embedding_model)
+    return EMBEDDING_FUNCTION
 
 def get_ragas_metrics(question: str, context: list, answer: list, model: str):
     """Calculates RAGAS metrics."""
@@ -49,7 +56,7 @@ def get_ragas_metrics(question: str, context: list, answer: list, model: str):
             dataset=dataset,
             metrics=[faithfulness, answer_relevancy,context_entity_recall],
             llm=llm,
-            embeddings=EMBEDDING_FUNCTION,
+            embeddings=_get_embedding_function(),
         )
         
         score_dict = (
@@ -78,7 +85,7 @@ async def get_additional_metrics(question: str, contexts: list, answers: list, r
        if ("diffbot" in model_name) or ("ollama" in model_name):
            raise ValueError(f"Unsupported model for evaluation: {model_name}")
        llm, model_name, _ = get_llm(model=model_name)
-       embeddings = EMBEDDING_FUNCTION
+       embeddings = _get_embedding_function()
        embedding_model = LangchainEmbeddingsWrapper(embeddings=embeddings)
        rouge_scorer = RougeScore()
        semantic_scorer = SemanticSimilarity()

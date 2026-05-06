@@ -4,7 +4,7 @@ from langchain_core.documents import Document
 from langchain_neo4j import Neo4jGraph
 from langchain_text_splitters import TokenTextSplitter
 
-from src.document_sources.youtube import get_calculated_timestamps, get_chunks_with_timestamps
+# from src.document_sources.youtube import  # 注释：不使用YouTube功能 get_calculated_timestamps, get_chunks_with_timestamps
 from src.shared.common_fn import get_value_from_env
 from src.medical_extraction_config import BATCH_PROCESSING_CONFIG
 

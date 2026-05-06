@@ -24,7 +24,7 @@ from src.document_sources.local_file import get_documents_from_file_by_path
 from src.document_sources.s3_bucket import get_documents_from_s3, get_s3_files_info
 from src.document_sources.web_pages import get_documents_from_web_page
 from src.document_sources.wikipedia import get_documents_from_wikipedia
-from src.document_sources.youtube import get_documents_from_youtube, get_youtube_combined_transcript
+# from src.document_sources.youtube import  # 注释：不使用YouTube功能 get_documents_from_youtube, get_youtube_combined_transcript
 from src.entities.source_node import sourceNode
 from src.graph_query import get_graphDB_driver
 from src.graphDB_dataAccess import graphDBdataAccess
@@ -251,51 +251,51 @@ def create_source_node_graph_web_url(graph, params):
     success_count+=1
     return lst_file_name,success_count,failed_count
   
-def create_source_node_graph_url_youtube(graph, params):
-    """
-    Create a source node in the graph for a YouTube video.
-
-    Args:
-        graph: Neo4j graph connection.
-        params: SourceScanExtractParams object.
-
-    Returns:
-        tuple: (list of file info dicts, success_count, failed_count)
-    """
-    youtube_url, language = check_url_source(source_type=params.source_type, yt_url=params.source_url)
-    success_count=0
-    failed_count=0
-    lst_file_name = []
-    obj_source_node = sourceNode()
-    obj_source_node.file_type = 'text'
-    obj_source_node.file_source = params.source_type
-    obj_source_node.model = params.model
-    obj_source_node.url = youtube_url
-    obj_source_node.created_at = datetime.now()
-    obj_source_node.chunkNodeCount=0
-    obj_source_node.chunkRelCount=0
-    obj_source_node.entityNodeCount=0
-    obj_source_node.entityEntityRelCount=0
-    obj_source_node.communityNodeCount=0
-    obj_source_node.communityRelCount=0
-    match = re.search(r'(?:v=)([0-9A-Za-z_-]{11})\s*',obj_source_node.url)
-    logging.info(f"match value: {match}")
-    obj_source_node.file_name = match.group(1)
-    transcript= get_youtube_combined_transcript(match.group(1))
-    # logging.info(f"Youtube transcript : {transcript}")
-    if transcript==None or len(transcript)==0:
-      message = f"Youtube transcript is not available for : {obj_source_node.file_name}"
-      raise LLMGraphBuilderException(message)
-    else:  
-      obj_source_node.file_size = sys.getsizeof(transcript)
-    
-    graphDb_data_Access = graphDBdataAccess(graph)
-    graphDb_data_Access.create_source_node(obj_source_node)
-    lst_file_name.append({'fileName':obj_source_node.file_name,'fileSize':obj_source_node.file_size,'url':obj_source_node.url,'status':'Success'})
-    success_count+=1
-    return lst_file_name,success_count,failed_count
-
-def create_source_node_graph_url_wikipedia(graph, params):
+# def create_source_node_graph_url_youtube(graph, params):
+#     """
+#     Create a source node in the graph for a YouTube video.
+# 
+#     Args:
+#         graph: Neo4j graph connection.
+#         params: SourceScanExtractParams object.
+# 
+#     Returns:
+#         tuple: (list of file info dicts, success_count, failed_count)
+#     """
+#     youtube_url, language = check_url_source(source_type=params.source_type, yt_url=params.source_url)
+#     success_count=0
+#     failed_count=0
+#     lst_file_name = []
+#     obj_source_node = sourceNode()
+#     obj_source_node.file_type = 'text'
+#     obj_source_node.file_source = params.source_type
+#     obj_source_node.model = params.model
+#     obj_source_node.url = youtube_url
+#     obj_source_node.created_at = datetime.now()
+#     obj_source_node.chunkNodeCount=0
+#     obj_source_node.chunkRelCount=0
+#     obj_source_node.entityNodeCount=0
+#     obj_source_node.entityEntityRelCount=0
+#     obj_source_node.communityNodeCount=0
+#     obj_source_node.communityRelCount=0
+#     match = re.search(r'(?:v=)([0-9A-Za-z_-]{11})\s*',obj_source_node.url)
+#     logging.info(f"match value: {match}")
+#     obj_source_node.file_name = match.group(1)
+#     transcript= get_youtube_combined_transcript(match.group(1))
+#     # logging.info(f"Youtube transcript : {transcript}")
+#     if transcript==None or len(transcript)==0:
+#       message = f"Youtube transcript is not available for : {obj_source_node.file_name}"
+#       raise LLMGraphBuilderException(message)
+#     else:  
+#       obj_source_node.file_size = sys.getsizeof(transcript)
+#     
+#     graphDb_data_Access = graphDBdataAccess(graph)
+#     graphDb_data_Access.create_source_node(obj_source_node)
+#     lst_file_name.append({'fileName':obj_source_node.file_name,'fileSize':obj_source_node.file_size,'url':obj_source_node.url,'status':'Success'})
+#     success_count+=1
+#     return lst_file_name,success_count,failed_count
+# 
+# def create_source_node_graph_url_wikipedia(graph, params):
     """
     Create a source node in the graph for a Wikipedia page.
 
@@ -395,27 +395,27 @@ async def extract_graph_from_web_page(credentials, params):
   else:
     return await processing_source(credentials, params, [])
   
-async def extract_graph_from_file_youtube(credentials, params):
-  """
-  Extract graph data from a YouTube video.
-
-  Args:
-      credentials: Database credentials.
-      params: SourceScanExtractParams object.
-
-  Returns:
-      dict: Processing latency and response details.
-  """
-  if params.retry_condition in ["", None] or params.retry_condition not in [DELETE_ENTITIES_AND_START_FROM_BEGINNING, START_FROM_LAST_PROCESSED_POSITION]:
-    file_name, pages = get_documents_from_youtube(params.source_url)
-
-    if pages==None or len(pages)==0:
-      raise LLMGraphBuilderException(f'Youtube transcript is not available for file : {file_name}')
-    return await processing_source(credentials, params, pages)
-  else:
-     return await processing_source(credentials, params, [])
-    
-async def extract_graph_from_file_Wikipedia(credentials, params):
+# async def extract_graph_from_file_youtube(credentials, params):
+#   """
+#   Extract graph data from a YouTube video.
+# 
+#   Args:
+#       credentials: Database credentials.
+#       params: SourceScanExtractParams object.
+# 
+#   Returns:
+#       dict: Processing latency and response details.
+#   """
+#   if params.retry_condition in ["", None] or params.retry_condition not in [DELETE_ENTITIES_AND_START_FROM_BEGINNING, START_FROM_LAST_PROCESSED_POSITION]:
+#     file_name, pages = get_documents_from_youtube(params.source_url)
+# 
+#     if pages==None or len(pages)==0:
+#       raise LLMGraphBuilderException(f'Youtube transcript is not available for file : {file_name}')
+#     return await processing_source(credentials, params, pages)
+#   else:
+#      return await processing_source(credentials, params, [])
+#     
+# async def extract_graph_from_file_Wikipedia(credentials, params):
   """
   Extract graph data from a Wikipedia page.
 

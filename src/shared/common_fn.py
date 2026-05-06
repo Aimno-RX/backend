@@ -5,13 +5,13 @@ import logging
 from typing import Any
 from src.entities.user_credential import Neo4jCredentials
 from transformers import AutoTokenizer, AutoModel
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from threading import Lock
 import logging
 from urllib.parse import urlparse,parse_qs
 from src.shared.llm_graph_builder_exception import LLMGraphBuilderException
-from langchain_google_vertexai import VertexAIEmbeddings
-from langchain_openai import OpenAIEmbeddings
+from langchain_community.embeddings import VertexAIEmbeddings
+from langchain_community.embeddings import OpenAIEmbeddings
 from langchain_neo4j import Neo4jGraph
 from neo4j.exceptions import TransientError
 from langchain_community.graphs.graph_document import GraphDocument

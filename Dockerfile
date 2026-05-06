@@ -47,6 +47,14 @@ RUN python -m nltk.downloader -d /usr/local/nltk_data punkt && \
 
 COPY . /code/
 
+
+RUN sed -i 's/from langchain_classic\.retrievers/from langchain.retrievers/g' /code/src/QA_integration.py && \
+    sed -i 's/from langchain_classic\.retrievers\.document_compressors/from langchain.retrievers.document_compressors/g' /code/src/QA_integration.py && \
+    sed -i 's/from langchain_huggingface/from langchain_community.embeddings/g' /code/src/shared/common_fn.py && \
+    sed -i 's/from langchain_google_vertexai/from langchain_community.embeddings/g' /code/src/shared/common_fn.py
+ 
+
+
 RUN mkdir -p /code/chunks /code/merged_files /code/local_model && \
     chmod -R 755 /code
 

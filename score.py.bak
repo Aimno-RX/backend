@@ -32,7 +32,8 @@ from src.logger import CustomLogger
 from src.main import (
     connection_check_and_get_vector_dimensions, create_source_node_graph_url_gcs, create_source_node_graph_url_s3,
     create_source_node_graph_web_url,
-    create_graph_database_connection, extract_graph_from_file_gcs,
+    create_graph_database_connection, create_source_node_graph_url_wikipedia,
+    extract_graph_from_file_Wikipedia, extract_graph_from_file_gcs,
     extract_graph_from_file_local_file, extract_graph_from_file_s3, 
     extract_graph_from_web_page, failed_file_process, get_labels_and_relationtypes, get_source_list_from_graph,
     manually_cancelled_job, populate_graph_schema_from_text, set_status_retry, update_graph, upload_file
@@ -1145,51 +1146,3 @@ async def get_token_limits(credentials: Neo4jCredentials = Depends(get_neo4j_cre
 if __name__ == "__main__":
     uvicorn.run(app)
 
-
-@app.get('/statistics')
-async def get_statistics(credentials: Neo4jCredentials = Depends(get_neo4j_credentials)):
-    """
-    获取知识图谱统计信息
-    包括：总文档数、总分块数、总实体数、总关系数、问答会话数
-    """
-    try:
-        start = time.time()
-        graph = Neo4jGraph(
-            url=credentials.uri,
-            username=credentials.userName,
-            password=credentials.password,
-            database=credentials.database
-        )
-        
-        # 统计查询
-        total_documents = graph.query("MATCH (d:Document) RETURN count(d) as count")[0]['count']
-        total_chunks = graph.query("MATCH (c:Chunk) RETURN count(c) as count")[0]['count']
-        total_entities = graph.query("MATCH (e:__Entity__) RETURN count(e) as count")[0]['count']
-        total_relationships = graph.query("MATCH ()-[r]->() RETURN count(r) as count")[0]['count']
-        
-        # 统计问答会话数
-        try:
-            total_sessions = graph.query("MATCH (s:Session) RETURN count(s) as count")[0]['count']
-        except:
-            total_sessions = 0
-        
-        end = time.time()
-        elapsed_time = end - start
-        
-        result = {
-            'total_documents': total_documents,
-            'total_chunks': total_chunks,
-            'total_entities': total_entities,
-            'total_relationships': total_relationships,
-            'total_sessions': total_sessions,
-            'api_name': 'statistics',
-            'elapsed_api_time': f'{elapsed_time:.2f}'
-        }
-        
-        logging.info(f"Statistics query successful: {result}")
-        return create_api_response('Success', data=result)
-        
-    except Exception as e:
-        error_message = str(e)
-        logging.exception(f'Statistics query failed: {error_message}')
-        return create_api_response('Failed', message='Statistics query failed', error=error_message)

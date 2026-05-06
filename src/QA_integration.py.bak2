@@ -28,12 +28,12 @@ from langchain_openai import ChatOpenAI
 from src.llm import get_llm
 from src.shared.common_fn import load_embedding_model, track_token_usage,get_value_from_env
 from src.shared.constants import (
+from src.custom_neo4j_retriever import CustomNeo4jRetriever
     CHAT_SYSTEM_TEMPLATE, CHAT_TOKEN_CUT_OFF, CHAT_ENTITY_VECTOR_MODE,
     CHAT_GLOBAL_VECTOR_FULLTEXT_MODE, CHAT_SEARCH_KWARG_SCORE_THRESHOLD,CHAT_MODE_CONFIG_MAP, CHAT_DEFAULT_MODE, CHAT_GRAPH_MODE,CHAT_EMBEDDING_FILTER_SCORE_THRESHOLD, CHAT_DOC_SPLIT_SIZE, QUESTION_TRANSFORM_TEMPLATE
 )
 load_dotenv() 
 
-from src.custom_neo4j_retriever import CustomNeo4jRetriever
 EMBEDDING_MODEL = get_value_from_env("EMBEDDING_MODEL", "sentence_transformer")
 
 class SessionChatHistory:
@@ -360,30 +360,24 @@ def initialize_neo4j_vector(graph, chat_mode_settings):
         raise
     return neo_db
 
-def create_retriever(neo_db, document_names, chat_mode_settings, search_k, score_threshold, ef_ratio, embedding_function):
-    """
-    创建检索器 - 使用CustomNeo4jRetriever确保query_vector参数正确传递
-    """
-    search_kwargs = {
-        'top_k': search_k,
-        'effective_search_ratio': ef_ratio,
-        'score_threshold': score_threshold
-    }
-    
-    if document_names and chat_mode_settings.get("document_filter"):
-        search_kwargs['filter'] = {'fileName': {'$in': document_names}}
-        logging.info(f"Created retriever with document filter for: {document_names}")
+def create_retriever(neo_db, document_names, chat_mode_settings,search_k, score_threshold,ef_ratio):
+    if document_names and chat_mode_settings["document_filter"]:
+        retriever = neo_db.as_retriever(
+            search_type="similarity_score_threshold",
+            search_kwargs={
+                'top_k': search_k,
+                'effective_search_ratio': ef_ratio,
+                'score_threshold': score_threshold,
+                'filter': {'fileName': {'$in': document_names}}
+            }
+        )
+        logging.info(f"Successfully created retriever with search_k={search_k}, score_threshold={score_threshold} for documents {document_names}")
     else:
+        retriever = neo_db.as_retriever(
+            search_type="similarity_score_threshold",
+            search_kwargs={'top_k': search_k,'effective_search_ratio': ef_ratio, 'score_threshold': score_threshold}
+        )
         logging.info(f"Successfully created retriever with search_k={search_k}, score_threshold={score_threshold}")
-    
-    # 使用自定义检索器
-    retriever = CustomNeo4jRetriever(
-        neo4j_vector=neo_db,
-        embedding_function=embedding_function,
-        search_type="similarity_score_threshold",
-        search_kwargs=search_kwargs
-    )
-    
     return retriever
 
 def get_neo4j_retriever(graph, document_names,chat_mode_settings, score_threshold=CHAT_SEARCH_KWARG_SCORE_THRESHOLD):
@@ -393,8 +387,7 @@ def get_neo4j_retriever(graph, document_names,chat_mode_settings, score_threshol
         # document_names= list(map(str.strip, json.loads(document_names)))
         search_k = chat_mode_settings["top_k"]
         ef_ratio = get_value_from_env("EFFECTIVE_SEARCH_RATIO", 5, "int")
-        EMBEDDING_FUNCTION, _ = load_embedding_model(EMBEDDING_MODEL)
-        retriever = create_retriever(neo_db, document_names, chat_mode_settings, search_k, score_threshold, ef_ratio, EMBEDDING_FUNCTION)
+        retriever = create_retriever(neo_db, document_names,chat_mode_settings, search_k, score_threshold,ef_ratio)
         return retriever
     except Exception as e:
         index_name = chat_mode_settings.get("index_name")

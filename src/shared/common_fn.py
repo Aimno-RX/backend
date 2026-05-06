@@ -135,10 +135,10 @@ def load_embedding_model(embedding_model_name: str):
         dimension = 1024
         logging.info(f"Embedding: Using bedrock titan Embeddings , Dimension:{dimension}")
     else:
-        # embeddings = HuggingFaceEmbeddings(model_name="./local_model")
-        embeddings = get_local_sentence_transformer_embedding()
-        dimension = 384
-        logging.info(f"Embedding: Using Langchain HuggingFaceEmbeddings , Dimension:{dimension}")
+        # 使用bge-small-zh-v1.5 (512维)
+        embeddings = HuggingFaceEmbeddings(model_name="/code/bge-small-zh-v1.5")
+        dimension = 512
+        logging.info(f"Embedding: Using BGE-small-zh-v1.5, Dimension:{dimension}")
     return embeddings, dimension
 
 def save_graphDocuments_in_neo4j(graph: Neo4jGraph, graph_document_list: List[GraphDocument], max_retries=3, delay=1):

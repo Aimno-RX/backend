@@ -10,7 +10,8 @@ from typing import List
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, Request, UploadFile
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi_health import health
@@ -50,6 +51,13 @@ load_dotenv(override=True)
 logger = CustomLogger()
 CHUNK_DIR = os.path.join(os.path.dirname(__file__), "chunks")
 MERGED_DIR = os.path.join(os.path.dirname(__file__), "merged_files")
+
+class CypherQueryRequest(BaseModel):
+    query: str
+    uri: str
+    userName: str
+    password: str
+    limit: int = 100
 
 
 def sanitize_filename(filename: str) -> str:
@@ -737,6 +745,56 @@ async def get_document_status(file_name, url, userName, password, database):
         logging.exception(f'{message}:{error_message}')
         return create_api_response('Failed',message=message)
     
+@app.post('/execute_cypher')
+async def execute_cypher(request: CypherQueryRequest = Body(...)):
+    """执行Cypher查询语句（支持增删改查）"""
+    try:
+        start = time.time()
+        
+        credentials = Neo4jCredentials(
+            uri=request.uri,
+            userName=request.userName,
+            password=request.password
+        )
+        graph = create_graph_database_connection(credentials)
+        query = request.query
+        limit = request.limit
+        
+        dangerous_keywords = ['DROP']
+        query_upper = query.upper()
+        for keyword in dangerous_keywords:
+            if keyword in query_upper:
+                return create_api_response('Failed', message=f"禁止执行危险操作: {keyword}")
+        
+        write_keywords = ['CREATE', 'SET', 'DELETE', 'REMOVE', 'MERGE']
+        is_write_query = any(keyword in query_upper for keyword in write_keywords)
+        
+        if not is_write_query and 'LIMIT' not in query_upper:
+            query = query.rstrip(';') + f' LIMIT {limit}'
+        
+        result = graph.query(query)
+        
+        end = time.time()
+        elapsed_time = end - start
+        
+        logging.info(f'Cypher query executed in {elapsed_time:.2f}s, returned {len(result)} rows')
+        
+        return create_api_response('Success', 
+            message="", 
+            data={
+                'results': result,
+                'query': query,
+                'elapsed_time': f'{elapsed_time:.2f}'
+            }
+        )
+        
+    except Exception as e:
+        message = "Cypher query execution failed"
+        error_message = str(e)
+        logging.exception(f'{message}:{error_message}')
+        return create_api_response('Failed', message=message, error=error_message)
+    
+
 @app.post("/cancelled_job")
 async def cancelled_job(
     credentials: Neo4jCredentials = Depends(get_neo4j_credentials),

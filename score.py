@@ -51,6 +51,20 @@ load_dotenv(override=True)
 logger = CustomLogger()
 CHUNK_DIR = os.path.join(os.path.dirname(__file__), "chunks")
 MERGED_DIR = os.path.join(os.path.dirname(__file__), "merged_files")
+QUERY_LIBRARY_FILE = os.path.join(os.path.dirname(__file__), "query_library.json")
+
+
+def load_query_library():
+    if not os.path.exists(QUERY_LIBRARY_FILE):
+        return []
+    with open(QUERY_LIBRARY_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def save_query_library(library):
+    with open(QUERY_LIBRARY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(library, f, ensure_ascii=False, indent=2)
+
 
 class CypherQueryRequest(BaseModel):
     query: str
@@ -58,6 +72,12 @@ class CypherQueryRequest(BaseModel):
     userName: str
     password: str
     limit: int = 100
+
+class QueryLibraryItem(BaseModel):
+    title: str
+    query: str
+    icon: str = "code"
+    custom: bool = True
 
 
 def sanitize_filename(filename: str) -> str:
@@ -793,7 +813,56 @@ async def execute_cypher(request: CypherQueryRequest = Body(...)):
         error_message = str(e)
         logging.exception(f'{message}:{error_message}')
         return create_api_response('Failed', message=message, error=error_message)
-    
+
+
+@app.get('/query_library')
+async def get_query_library():
+    """获取自定义查询库"""
+    try:
+        library = load_query_library()
+        return create_api_response('Success', data=library)
+    except Exception as e:
+        message = "Failed to load query library"
+        error_message = str(e)
+        logging.exception(f'{message}:{error_message}')
+        return create_api_response('Failed', message=message, error=error_message)
+
+
+@app.post('/query_library')
+async def add_query_library_item(item: QueryLibraryItem = Body(...)):
+    """添加自定义查询"""
+    try:
+        library = load_query_library()
+        new_item = item.dict()
+        library.append(new_item)
+        save_query_library(library)
+        logging.info(f'Added custom query: {item.title}')
+        return create_api_response('Success', message="Query added successfully", data=new_item)
+    except Exception as e:
+        message = "Failed to add query"
+        error_message = str(e)
+        logging.exception(f'{message}:{error_message}')
+        return create_api_response('Failed', message=message, error=error_message)
+
+
+@app.delete('/query_library/{index}')
+async def delete_query_library_item(index: int):
+    """删除自定义查询"""
+    try:
+        library = load_query_library()
+        if 0 <= index < len(library):
+            deleted_item = library.pop(index)
+            save_query_library(library)
+            logging.info(f'Deleted custom query at index {index}: {deleted_item.get("title", "unknown")}')
+            return create_api_response('Success', message="Query deleted successfully")
+        else:
+            return create_api_response('Failed', message="Invalid index")
+    except Exception as e:
+        message = "Failed to delete query"
+        error_message = str(e)
+        logging.exception(f'{message}:{error_message}')
+        return create_api_response('Failed', message=message, error=error_message)
+
 
 @app.post("/cancelled_job")
 async def cancelled_job(

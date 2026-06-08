@@ -363,11 +363,13 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
         vision_llm = get_vision_llm(vision_model)
         if vision_llm:
           try:
+            max_images = get_value_from_env("VISION_MAX_IMAGES", "20", "int")
             image_descriptions = process_document_images(
               file_path=merged_file_path,
               file_extension=file_extension,
               vision_llm=vision_llm,
               pages=pages,
+              max_images=max_images,
             )
             if image_descriptions:
               pages = merge_image_descriptions_into_pages(pages, image_descriptions)
@@ -375,11 +377,10 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
                 f"Image descriptions merged: {len(image_descriptions)} images from {file_extension}"
               )
 
-              # Save image files and store ExerciseImage nodes in Neo4j
               try:
                 from src.image_processor import extract_images_from_document
                 from src.image_storage import save_image_files, store_image_nodes, link_images_to_chunks
-                raw_images, _ = extract_images_from_document(merged_file_path, file_extension, max_total=0)
+                raw_images, _ = extract_images_from_document(merged_file_path, file_extension, max_total=max_images)
                 if raw_images:
                   graph_for_images = create_graph_database_connection(credentials)
                   saved_paths = save_image_files(params.file_name, raw_images, image_descriptions)

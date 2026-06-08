@@ -35,7 +35,8 @@ from src.main import (
     create_source_node_graph_web_url,
     create_graph_database_connection, extract_graph_from_file_gcs,
     extract_graph_from_file_local_file, extract_graph_from_file_s3, 
-    extract_graph_from_web_page, failed_file_process, get_labels_and_relationtypes, get_source_list_from_graph,
+    extract_graph_from_web_page, extract_graph_from_file_Wikipedia,
+    failed_file_process, get_labels_and_relationtypes, get_source_list_from_graph,
     manually_cancelled_job, populate_graph_schema_from_text, set_status_retry, update_graph, upload_file
 )
 from src.neighbours import get_neighbour_nodes
@@ -52,6 +53,7 @@ logger = CustomLogger()
 CHUNK_DIR = os.path.join(os.path.dirname(__file__), "chunks")
 MERGED_DIR = os.path.join(os.path.dirname(__file__), "merged_files")
 QUERY_LIBRARY_FILE = os.path.join(os.path.dirname(__file__), "query_library.json")
+IMAGE_STORAGE_DIR = os.getenv("IMAGE_STORAGE_DIR", "/data/images")
 
 
 def load_query_library():
@@ -157,6 +159,52 @@ app.add_middleware(
 )
 app.add_middleware(SessionMiddleware, secret_key=os.urandom(24))
 app.add_api_route("/health", health([healthy_condition, healthy]))
+
+
+@app.get("/api/images/{file_name}/{image_id}")
+async def serve_image(file_name: str, image_id: str):
+    """Return an image file from the image storage directory."""
+    from fastapi.responses import FileResponse
+    from fastapi import HTTPException
+    import glob as glob_module
+    from src.image_storage import sanitize_file_name
+
+    safe_name = sanitize_file_name(file_name)
+    image_dir = os.path.join(IMAGE_STORAGE_DIR, safe_name)
+
+    if not os.path.isdir(image_dir):
+        raise HTTPException(status_code=404, detail=f"Image directory not found for: {file_name}")
+
+    pattern = os.path.join(image_dir, f"{image_id}_*")
+    matches = glob_module.glob(pattern)
+
+    if not matches:
+        pattern2 = os.path.join(image_dir, f"img_{image_id}_*")
+        matches = glob_module.glob(pattern2)
+
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"Image not found: {image_id}")
+
+    image_path = matches[0]
+
+    if not os.path.isfile(image_path):
+        raise HTTPException(status_code=404, detail=f"Image file not found: {image_id}")
+
+    return FileResponse(image_path)
+
+
+@app.get("/api/images/search")
+async def search_images(
+    query: str,
+    limit: int = 5,
+    credentials: Neo4jCredentials = Depends(get_neo4j_credentials),
+):
+    """Search exercise images by symptom, exercise name, or body part."""
+    from src.image_storage import search_images_by_symptom
+
+    graph = create_graph_database_connection(credentials)
+    results = search_images_by_symptom(graph, query, limit=limit)
+    return create_api_response("Success", data=results)
 
 
 @app.post("/url/scan")

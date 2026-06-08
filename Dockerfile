@@ -55,8 +55,10 @@ RUN sed -i 's/from langchain_classic\.retrievers/from langchain.retrievers/g' /c
  
 
 
-RUN mkdir -p /code/chunks /code/merged_files /code/local_model && \
-    chmod -R 755 /code
+RUN mkdir -p /code/chunks /code/merged_files /code/local_model /data/images && \
+    chmod -R 755 /code /data
+
+VOLUME ["/data/images"]
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1

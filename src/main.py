@@ -28,7 +28,8 @@ from src.document_sources.wikipedia import get_documents_from_wikipedia
 from src.entities.source_node import sourceNode
 from src.graph_query import get_graphDB_driver
 from src.graphDB_dataAccess import graphDBdataAccess
-from src.llm import get_graph_from_llm
+from src.llm import get_graph_from_llm, get_vision_llm
+from src.image_processor import process_document_images, merge_image_descriptions_into_pages
 from src.triplet_enhancement_integration import TripletEnhancementPipeline
 from src.make_relationships import (
     create_chunk_embeddings, create_chunk_vector_index, create_relation_between_chunks,
@@ -342,6 +343,7 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
 
   logging.info(f'Process file name :{params.file_name} from local file system')
   if params.retry_condition in ["", None] or params.retry_condition not in [DELETE_ENTITIES_AND_START_FROM_BEGINNING, START_FROM_LAST_PROCESSED_POSITION]:
+    file_extension = ""
     if GCS_FILE_CACHE:
       folder_name = create_gcs_bucket_folder_name_hashed(credentials.uri, params.file_name)
       file_name, pages = get_documents_from_gcs( PROJECT_ID, BUCKET_UPLOAD_FILE, folder_name, params.file_name)
@@ -349,6 +351,49 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
       file_name, pages, file_extension = get_documents_from_file_by_path(merged_file_path, params.file_name)
     if pages==None or len(pages)==0:
       raise LLMGraphBuilderException(f'File content is not available for file : {file_name}')
+
+    if not file_extension:
+      file_extension = os.path.splitext(params.file_name)[1].lower()
+    if file_extension in ['.pdf', '.docx', '.doc']:
+      vision_model = get_value_from_env("VISION_MODEL", "", "str")
+      if vision_model:
+        logging.info(
+          f"Vision model configured: {vision_model}, extracting images from {file_extension}"
+        )
+        vision_llm = get_vision_llm(vision_model)
+        if vision_llm:
+          try:
+            image_descriptions = process_document_images(
+              file_path=merged_file_path,
+              file_extension=file_extension,
+              vision_llm=vision_llm,
+              pages=pages,
+            )
+            if image_descriptions:
+              pages = merge_image_descriptions_into_pages(pages, image_descriptions)
+              logging.info(
+                f"Image descriptions merged: {len(image_descriptions)} images from {file_extension}"
+              )
+
+              # Save image files and store ExerciseImage nodes in Neo4j
+              try:
+                from src.image_processor import extract_images_from_document
+                from src.image_storage import save_image_files, store_image_nodes, link_images_to_chunks
+                raw_images, _ = extract_images_from_document(merged_file_path, file_extension, max_total=0)
+                if raw_images:
+                  graph_for_images = create_graph_database_connection(credentials)
+                  saved_paths = save_image_files(params.file_name, raw_images, image_descriptions)
+                  if saved_paths:
+                    stored = store_image_nodes(graph_for_images, params.file_name, saved_paths)
+                    linked = link_images_to_chunks(graph_for_images, params.file_name, saved_paths)
+                    logging.info(
+                      f"Image storage complete: {stored} nodes stored, {linked} chunk links created"
+                    )
+              except Exception as img_err:
+                logging.warning(f"Image storage to Neo4j failed (non-fatal): {img_err}")
+          except Exception as e:
+            logging.warning(f"Image processing failed, continuing with text only: {e}")
+
     return await processing_source(credentials, params, pages, merged_file_path, True)
   else:
     return await processing_source(credentials, params, [], merged_file_path, True)
@@ -415,7 +460,7 @@ async def extract_graph_from_web_page(credentials, params):
 #   else:
 #      return await processing_source(credentials, params, [])
 #     
-# async def extract_graph_from_file_Wikipedia(credentials, params):
+async def extract_graph_from_file_Wikipedia(credentials, params):
   """
   Extract graph data from a Wikipedia page.
 

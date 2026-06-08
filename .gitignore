@@ -2,21 +2,22 @@
 __pycache__/
 *.py[cod]
 *.pyo
+*.py.bak*
 
 # Large files
 bge-small-zh-v1.5/
+local_model/
 *.bin
 *.model
 *.vec
+*.safetensors
 
 # Backup
 *_backup_*
 src_backup_*
 
 # Temp
-*.txt
 --*
-dockerfile
 backend-app:*
 
 # Logs & Env
@@ -31,3 +32,38 @@ update_qa.py
 *_import_fix.py
 constraints.txt
 *.docx
+
+# Test & debug files
+test_*.py
+check_*.py
+dbtest.py
+quick_diagnosis.py
+locustperf.py
+Performance_test.py
+analyze_doc_structure.py
+extract_imgs.py
+extract_v2.py
+download_model.py
+resume_extract.py
+run_extract.py
+dbtest.py
+session-*.md
+session_summary_*.md
+
+# Extracted images
+extracted_images/
+extracted_images_v2/
+test_output_images/
+
+# Upload dirs
+chunks/
+merged_files/
+
+# Nested duplicates
+src/src/
+
+# Docker ignore patterns (keep actual Dockerfile)
+
+# OS
+.DS_Store
+Thumbs.db

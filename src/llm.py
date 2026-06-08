@@ -50,6 +50,48 @@ def get_llm(model: str):
     logging.info(f"Model created - Model Version: {model}")
     return llm, model_name, callback_handler
 
+
+def get_vision_llm(model: str):
+    """Retrieve a vision-capable (multimodal) language model for image description.
+    支持 DeepSeek-VL、Qwen-VL 等通过 OpenAI 兼容接口的多模态模型。
+
+    Args:
+        model: Model identifier string (e.g. 'deepseek_vl', 'qwen_vl').
+
+    Returns:
+        ChatOpenAI: Vision-capable LLM instance configured for image understanding.
+    """
+    model = model.upper().replace('.', '_').replace(' ', '_').strip()
+    env_key = f"LLM_MODEL_CONFIG_{model}"
+    env_value = get_value_from_env(env_key)
+
+    if not env_value:
+        logging.warning(
+            f"Vision model config '{env_key}' not set. "
+            f"Image recognition will be skipped."
+        )
+        return None
+
+    logging.info("Vision Model: {}".format(env_key))
+
+    try:
+        model_name, api_endpoint, api_key = env_value.split(",")
+        llm = ChatOpenAI(
+            api_key=api_key,
+            base_url=api_endpoint,
+            model=model_name,
+            temperature=0,
+            max_tokens=2048,
+            request_timeout=120,
+        )
+        logging.info(f"Vision model created: {model_name}")
+    except Exception as e:
+        logging.error(f"Error creating vision LLM '{model}': {e}")
+        return None
+
+    return llm
+
+
 def get_llm_model_name(llm):
     """Extract name of llm model from llm object"""
     for attr in ["model_name", "model", "model_id"]:

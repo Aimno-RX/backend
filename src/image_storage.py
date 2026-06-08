@@ -359,6 +359,7 @@ def search_images_by_symptom(
     graph,
     query_text: str,
     limit: int = 5,
+    base_url: str = "",
 ) -> List[Dict]:
     """
     根据症状或动作名搜索相关图片（用于 QA 侧）。
@@ -367,6 +368,7 @@ def search_images_by_symptom(
         graph: Neo4jGraph 实例
         query_text: 查询文本（如"颈椎疼"、"练习一"）
         limit: 返回最大数量
+        base_url: 服务器基础 URL，用于生成完整图片链接
 
     Returns:
         匹配的图片信息列表
@@ -380,22 +382,76 @@ def search_images_by_symptom(
        OR img.startingPosture CONTAINS $query
        OR img.targetBodyParts CONTAINS $query
        OR img.movementDescription CONTAINS $query
+       OR img.precautions CONTAINS $query
     RETURN img.id AS id,
+           img.fileName AS fileName,
            img.imagePath AS imagePath,
            img.imageUrl AS imageUrl,
            img.exerciseName AS exerciseName,
            img.description AS description,
            img.startingPosture AS startingPosture,
+           img.movementDescription AS movementDescription,
            img.targetBodyParts AS targetBodyParts,
            img.repetitions AS repetitions,
            img.precautions AS precautions,
-           img.paragraphIndex AS paragraphIndex
+           img.paragraphIndex AS paragraphIndex,
+           img.semanticFilename AS semanticFilename
     LIMIT $limit
     """
 
     try:
         results = execute_graph_query(graph, cypher, params={"query": query_text, "limit": limit})
-        return results if results else []
+        if not results:
+            return []
+        if base_url:
+            base_url = base_url.rstrip("/")
+            for r in results:
+                img_id = r.get("id", "").split("_img_")[-1] if "_img_" in r.get("id", "") else r.get("id", "")
+                file_name = r.get("fileName", "")
+                r["fullImageUrl"] = f"{base_url}/api/images/{sanitize_file_name(file_name)}/{img_id}"
+        return results
     except Exception as e:
         logger.error(f"Failed to search images: {e}")
+        return []
+
+
+def get_images_by_document(
+    graph,
+    file_name: str,
+) -> List[Dict]:
+    """
+    获取指定文档的所有 ExerciseImage 节点。
+
+    Args:
+        graph: Neo4jGraph 实例
+        file_name: 文档名称
+
+    Returns:
+        该文档下所有图片信息列表
+    """
+    from src.shared.common_fn import execute_graph_query
+
+    cypher = """
+    MATCH (img:ExerciseImage {fileName: $fileName})
+    RETURN img.id AS id,
+           img.fileName AS fileName,
+           img.imagePath AS imagePath,
+           img.imageUrl AS imageUrl,
+           img.exerciseName AS exerciseName,
+           img.description AS description,
+           img.startingPosture AS startingPosture,
+           img.movementDescription AS movementDescription,
+           img.targetBodyParts AS targetBodyParts,
+           img.repetitions AS repetitions,
+           img.precautions AS precautions,
+           img.paragraphIndex AS paragraphIndex,
+           img.semanticFilename AS semanticFilename
+    ORDER BY img.imageIndex
+    """
+
+    try:
+        results = execute_graph_query(graph, cypher, params={"fileName": file_name})
+        return results if results else []
+    except Exception as e:
+        logger.error(f"Failed to get images for document {file_name}: {e}")
         return []

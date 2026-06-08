@@ -193,17 +193,59 @@ async def serve_image(file_name: str, image_id: str):
     return FileResponse(image_path)
 
 
-@app.get("/api/images/search")
+@app.post("/api/images/search")
 async def search_images(
-    query: str,
-    limit: int = 5,
+    request: Request,
     credentials: Neo4jCredentials = Depends(get_neo4j_credentials),
 ):
-    """Search exercise images by symptom, exercise name, or body part."""
+    """Search exercise images by symptom, exercise name, or body part. POST version for mini-program."""
     from src.image_storage import search_images_by_symptom
+    import json
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    query = body.get("query", "")
+    limit = body.get("limit", 5)
+    base_url = body.get("baseUrl", "")
+
+    if not query:
+        return create_api_response("Failed", message="query parameter is required")
 
     graph = create_graph_database_connection(credentials)
-    results = search_images_by_symptom(graph, query, limit=limit)
+    results = search_images_by_symptom(graph, query, limit=limit, base_url=base_url)
+    return create_api_response("Success", data=results)
+
+
+@app.post("/api/images/list")
+async def list_images_by_document(
+    request: Request,
+    credentials: Neo4jCredentials = Depends(get_neo4j_credentials),
+):
+    """Get all exercise images for a specific document."""
+    from src.image_storage import get_images_by_document, sanitize_file_name
+    import json
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    file_name = body.get("fileName", "")
+    base_url = body.get("baseUrl", "")
+
+    if not file_name:
+        return create_api_response("Failed", message="fileName parameter is required")
+
+    graph = create_graph_database_connection(credentials)
+    results = get_images_by_document(graph, file_name)
+
+    if base_url and results:
+        base_url = base_url.rstrip("/")
+        for r in results:
+            img_id = r.get("id", "").split("_img_")[-1] if "_img_" in r.get("id", "") else r.get("id", "")
+            r["fullImageUrl"] = f"{base_url}/api/images/{sanitize_file_name(file_name)}/{img_id}"
+
     return create_api_response("Success", data=results)
 
 

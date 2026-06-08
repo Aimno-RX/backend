@@ -16,6 +16,7 @@ logging.basicConfig(format="%(asctime)s - %(message)s", level="INFO")
 MAX_IMAGE_SIZE = 2048
 MAX_IMAGES_PER_PAGE = 10
 MIN_IMAGE_BYTES = 1024
+SKIP_IMAGE_EXTENSIONS = {"x-emf", "emf", "wmf", "x-wmf"}
 
 
 def _resize_image_if_needed(image_bytes: bytes, max_size: int = MAX_IMAGE_SIZE) -> bytes:
@@ -71,7 +72,15 @@ def extract_images_from_pdf(
             if len(image_bytes) < MIN_IMAGE_BYTES:
                 continue
 
-            image_bytes = _resize_image_if_needed(image_bytes)
+            if ext.lower() in SKIP_IMAGE_EXTENSIONS:
+                logging.info(f"Skipping {ext} image on page {page_num} (unsupported format)")
+                continue
+
+            try:
+                image_bytes = _resize_image_if_needed(image_bytes)
+            except Exception as e:
+                logging.warning(f"Skipping unreadable image on page {page_num}: {e}")
+                continue
 
             bbox = None
             for block in page.get_image_blocks():
@@ -155,7 +164,15 @@ def extract_images_from_docx(file_path: str, max_total: int = 0) -> List[dict]:
                 original_bytes = img_info["blob"]
                 if len(original_bytes) < MIN_IMAGE_BYTES:
                     continue
-                resized_bytes = _resize_image_if_needed(original_bytes)
+                ext = img_info["ext"].lower()
+                if ext in SKIP_IMAGE_EXTENSIONS:
+                    logging.info(f"Skipping EMF/WMF image at p{para_idx} (unsupported format)")
+                    continue
+                try:
+                    resized_bytes = _resize_image_if_needed(original_bytes)
+                except Exception as e:
+                    logging.warning(f"Skipping unreadable image at p{para_idx}: {e}")
+                    continue
                 images.append({
                     "paragraph_index": para_idx,
                     "image_bytes": resized_bytes,
@@ -379,35 +396,43 @@ def process_document_images(
 
     results = []
     for img in images:
-        if source_type == "pdf_page":
-            page_num = img.get("page_number", 0)
-            context = page_text_map.get(page_num, "")
-        else:
-            para_idx = img.get("paragraph_index", 0)
-            context = _get_paragraph_context(pages, para_idx) if pages else ""
-
-        b64 = encode_image_to_base64(img["image_bytes"])
-
-        description = describe_image(
-            vision_llm=vision_llm,
-            base64_image=b64,
-            image_format=img["extension"],
-            page_context=context,
-            page_number=img.get("page_number", img.get("paragraph_index", 0)),
-            image_index=img["index"],
-            description_mode=description_mode,
-        )
-
-        if description:
-            entry = {
-                "description": description,
-                "image_index": img["index"],
-            }
+        try:
             if source_type == "pdf_page":
-                entry["page_number"] = img.get("page_number", 0)
+                page_num = img.get("page_number", 0)
+                context = page_text_map.get(page_num, "")
             else:
-                entry["paragraph_index"] = img.get("paragraph_index", 0)
-            results.append(entry)
+                para_idx = img.get("paragraph_index", 0)
+                context = _get_paragraph_context(pages, para_idx) if pages else ""
+
+            b64 = encode_image_to_base64(img["image_bytes"])
+
+            ext = img.get("extension", "png").lower()
+            if ext in SKIP_IMAGE_EXTENSIONS:
+                continue
+
+            description = describe_image(
+                vision_llm=vision_llm,
+                base64_image=b64,
+                image_format=ext,
+                page_context=context,
+                page_number=img.get("page_number", img.get("paragraph_index", 0)),
+                image_index=img["index"],
+                description_mode=description_mode,
+            )
+
+            if description:
+                entry = {
+                    "description": description,
+                    "image_index": img["index"],
+                }
+                if source_type == "pdf_page":
+                    entry["page_number"] = img.get("page_number", 0)
+                else:
+                    entry["paragraph_index"] = img.get("paragraph_index", 0)
+                results.append(entry)
+        except Exception as e:
+            logging.warning(f"Failed to process image {img.get('index', '?')}: {e}")
+            continue
 
     logging.info(f"Described {len(results)}/{len(images)} images from {file_extension}")
     return results

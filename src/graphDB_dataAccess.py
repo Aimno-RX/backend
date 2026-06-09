@@ -286,10 +286,19 @@ class graphDBdataAccess:
         param = {"file_name" : file_name}
         return self.execute_query(query, param)
     
+    def _parse_form_param(self, value: str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed]
+            return [str(parsed).strip()]
+        except (json.JSONDecodeError, ValueError):
+            return [s.strip() for s in value.split(",") if s.strip()]
+
     def delete_file_from_graph(self, filenames, source_types, deleteEntities:str, merged_dir:str, uri):
         
-        filename_list= list(map(str.strip, json.loads(filenames)))
-        source_types_list= list(map(str.strip, json.loads(source_types)))
+        filename_list = self._parse_form_param(filenames)
+        source_types_list = self._parse_form_param(source_types)
         gcs_file_cache = get_value_from_env("GCS_FILE_CACHE","False","bool")
         
         for (file_name, source_type) in zip(filename_list, source_types_list):

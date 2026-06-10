@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import time
+import psutil
 import unicodedata
 import urllib.parse
 import warnings
@@ -339,6 +340,24 @@ def create_source_node_graph_web_url(graph, params):
       lst_file_name.append({'fileName':obj_source_node.file_name,'fileSize':obj_source_node.file_size,'url':obj_source_node.url, 'language':obj_source_node.language, 'status':'Success'})
     return lst_file_name,success_count,failed_count
     
+def get_adaptive_max_images():
+    env_val = os.environ.get("VISION_MAX_IMAGES", "")
+    if env_val.strip():
+        try:
+            val = int(env_val.strip())
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    try:
+        mem = psutil.virtual_memory()
+        available_mb = mem.available / (1024 * 1024)
+        usable_mb = max(0, available_mb - 1536)
+        calc = int(usable_mb / 12)
+        return max(20, min(500, calc))
+    except Exception:
+        return 20
+
 async def extract_graph_from_file_local_file(credentials, params, merged_file_path):
 
   logging.info(f'Process file name :{params.file_name} from local file system')
@@ -363,7 +382,8 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
         vision_llm = get_vision_llm(vision_model)
         if vision_llm:
           try:
-            max_images = get_value_from_env("VISION_MAX_IMAGES", "20", "int")
+            max_images = get_adaptive_max_images()
+            logging.info(f"Adaptive max_images={max_images} (env VISION_MAX_IMAGES overrides auto-detect)")
             image_descriptions = process_document_images(
               file_path=merged_file_path,
               file_extension=file_extension,
@@ -765,8 +785,8 @@ async def processing_source(credentials, params, pages, merged_file_path=None, i
 
 
       # merged_file_path have value only when file uploaded from local
-      # 为了支持“删除后重新上传同名文件再次生成”的流程，
-      # 本地上传文件不要在处理完成后自动删除。
+      # 为了支持“删除后重新上传同名文件再次生成”的流程�?
+      # 本地上传文件不要在处理完成后自动删除�?
       if is_uploaded_from_local and bool(is_cancelled_status) == False:
         if GCS_FILE_CACHE:
           folder_name = create_gcs_bucket_folder_name_hashed(credentials.uri, params.file_name)
@@ -875,7 +895,7 @@ async def processing_chunks(
   elapsed_save_token = end_save_token - start_save_token
   logging.info(f'Time taken to save token count: {elapsed_save_token:.2f} seconds')
   
-  # ================== 新增：实体优化 ==================
+  # ================== 新增：实体优�?==================
   from src.entity_optimizer import optimize_graph_documents
   start_optimize = time.time()
   graph_documents = optimize_graph_documents(graph_documents)

@@ -1,3 +1,4 @@
+import gc
 import hashlib
 import json
 import logging
@@ -382,36 +383,79 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
         vision_llm = get_vision_llm(vision_model)
         if vision_llm:
           try:
+            from src.image_processor import extract_images_from_document
+            from src.image_storage import save_image_files, store_image_nodes, link_images_to_chunks
+
             max_images = get_adaptive_max_images()
             logging.info(f"Adaptive max_images={max_images} (env VISION_MAX_IMAGES overrides auto-detect)")
-            image_descriptions = process_document_images(
-              file_path=merged_file_path,
-              file_extension=file_extension,
-              vision_llm=vision_llm,
-              pages=pages,
-              max_images=max_images,
-            )
-            if image_descriptions:
-              pages = merge_image_descriptions_into_pages(pages, image_descriptions)
-              logging.info(
-                f"Image descriptions merged: {len(image_descriptions)} images from {file_extension}"
-              )
 
-              try:
-                from src.image_processor import extract_images_from_document
-                from src.image_storage import save_image_files, store_image_nodes, link_images_to_chunks
-                raw_images, _ = extract_images_from_document(merged_file_path, file_extension, max_total=max_images)
-                if raw_images:
-                  graph_for_images = create_graph_database_connection(credentials)
-                  saved_paths = save_image_files(params.file_name, raw_images, image_descriptions)
-                  if saved_paths:
-                    stored = store_image_nodes(graph_for_images, params.file_name, saved_paths)
-                    linked = link_images_to_chunks(graph_for_images, params.file_name, saved_paths)
-                    logging.info(
-                      f"Image storage complete: {stored} nodes stored, {linked} chunk links created"
+            raw_images, source_type = extract_images_from_document(
+                merged_file_path, file_extension, max_total=0
+            )
+            total_images = len(raw_images) if raw_images else 0
+            del raw_images
+            gc.collect()
+            logging.info(f"Extracted total {total_images} images from {file_extension}")
+
+            if total_images > 0:
+              batch_size = max_images
+              all_image_descriptions = []
+              all_raw_images = []
+
+              for start_offset in range(0, total_images, batch_size):
+                current_batch = min(batch_size, total_images - start_offset)
+                logging.info(
+                  f"Processing batch {start_offset+1}-{start_offset+current_batch}/{total_images}"
+                )
+
+                batch_descriptions = process_document_images(
+                  file_path=merged_file_path,
+                  file_extension=file_extension,
+                  vision_llm=vision_llm,
+                  pages=pages,
+                  max_images=max_images,
+                  start_offset=start_offset,
+                  batch_size=batch_size,
+                )
+
+                if batch_descriptions:
+                  all_image_descriptions.extend(batch_descriptions)
+                  pages = merge_image_descriptions_into_pages(pages, batch_descriptions)
+
+                batch_raw, _ = extract_images_from_document(
+                  merged_file_path, file_extension,
+                  max_total=max_images, start_offset=start_offset, batch_size=batch_size
+                )
+                if batch_raw:
+                  all_raw_images.extend(batch_raw)
+                del batch_raw, batch_descriptions
+                gc.collect()
+
+              if all_image_descriptions:
+                logging.info(
+                  f"Image descriptions merged: {len(all_image_descriptions)} images from {file_extension}"
+                )
+                try:
+                  if all_raw_images:
+                    graph_for_images = create_graph_database_connection(credentials)
+                    saved_paths = save_image_files(
+                      params.file_name, all_raw_images, all_image_descriptions
                     )
-              except Exception as img_err:
-                logging.warning(f"Image storage to Neo4j failed (non-fatal): {img_err}")
+                    if saved_paths:
+                      stored = store_image_nodes(
+                        graph_for_images, params.file_name, saved_paths
+                      )
+                      linked = link_images_to_chunks(
+                        graph_for_images, params.file_name, saved_paths
+                      )
+                      logging.info(
+                        f"Image storage complete: {stored} nodes stored, {linked} chunk links created"
+                      )
+                except Exception as img_err:
+                  logging.warning(f"Image storage to Neo4j failed (non-fatal): {img_err}")
+
+                del all_raw_images
+                gc.collect()
           except Exception as e:
             logging.warning(f"Image processing failed, continuing with text only: {e}")
 

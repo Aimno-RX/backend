@@ -238,6 +238,8 @@ def extract_images_from_document(
     file_path: str,
     file_extension: str,
     max_total: int = 0,
+    start_offset: int = 0,
+    batch_size: int = 0,
 ) -> Tuple[List[dict], str]:
     """
     Unified entry point: extract images from PDF, DOCX, or DOC documents.
@@ -246,6 +248,8 @@ def extract_images_from_document(
         file_path: Path to the document.
         file_extension: Lowercase file extension (e.g. '.pdf', '.docx', '.doc').
         max_total: Maximum images to extract. 0 or negative means no limit.
+        start_offset: Start returning images from this index (0-based).
+        batch_size: Maximum number of images to return in this batch. 0 = no limit.
 
     Returns:
         Tuple of (images list, source_type).
@@ -254,14 +258,20 @@ def extract_images_from_document(
     ext = file_extension.lower()
 
     if ext == '.pdf':
-        return extract_images_from_pdf(file_path), 'pdf_page'
+        images, source_type = extract_images_from_pdf(file_path), 'pdf_page'
     elif ext == '.docx':
-        return extract_images_from_docx(file_path, max_total=max_total), 'docx_paragraph'
+        images, source_type = extract_images_from_docx(file_path, max_total=max_total), 'docx_paragraph'
     elif ext == '.doc':
-        return extract_images_from_doc(file_path), 'pdf_page'
+        images, source_type = extract_images_from_doc(file_path), 'pdf_page'
     else:
         logging.info(f"Unsupported format for image extraction: {ext}")
         return [], 'none'
+
+    if start_offset > 0 or batch_size > 0:
+        end = start_offset + batch_size if batch_size > 0 else len(images)
+        images = images[start_offset:end]
+
+    return images, source_type
 
 
 REHABILITATION_IMAGE_PROMPT = """\
@@ -375,18 +385,30 @@ def process_document_images(
     pages: list = None,
     max_images: Optional[int] = None,
     description_mode: str = "auto",
+    start_offset: int = 0,
+    batch_size: Optional[int] = None,
 ) -> List[dict]:
     """
     Unified entry: extract images from any supported document, describe with
     vision model, return descriptions.
+    
+    Args:
+        start_offset: Start processing from this image index (0-based).
+        batch_size: Number of images to process in this batch. None = process all from start_offset.
     """
     effective_max = max_images if max_images and max_images > 0 else 0
-    images, source_type = extract_images_from_document(
-        file_path, file_extension, max_total=effective_max
-    )
 
-    if not images:
-        return []
+    if batch_size is not None:
+        images, source_type = extract_images_from_document(
+            file_path, file_extension, max_total=0,
+            start_offset=start_offset, batch_size=batch_size,
+        )
+    else:
+        images, source_type = extract_images_from_document(
+            file_path, file_extension, max_total=effective_max,
+        )
+        if start_offset > 0:
+            images = images[start_offset:]
 
     page_text_map = {}
     if pages:

@@ -410,14 +410,17 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
 
               if total_images > 0:
                 batch_size = max_images
-                all_image_descriptions = []
-                all_raw_images = []
+                total_descriptions = 0
+                total_stored = 0
+                total_linked = 0
 
                 page_text_map = {}
                 if pages:
                   for i, p in enumerate(pages):
                     pn = p.metadata.get("page_number", i + 1)
                     page_text_map[pn] = p.page_content
+
+                graph_for_images = create_graph_database_connection(credentials)
 
                 for start_offset in range(0, total_images, batch_size):
                   current_batch = min(batch_size, total_images - start_offset)
@@ -457,23 +460,11 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
                       logging.warning(f"Failed to describe image {img.get('index', '?')}: {e}")
 
                   if batch_descriptions:
-                    all_image_descriptions.extend(batch_descriptions)
+                    total_descriptions += len(batch_descriptions)
                     pages = merge_image_descriptions_into_pages(pages, batch_descriptions)
-                    all_raw_images.extend(batch_images)
-                    logging.info(f"Batch described: {len(batch_descriptions)}/{len(batch_images)} images")
-
-                  del batch_images, batch_descriptions
-                  gc.collect()
-
-                if all_image_descriptions:
-                  logging.info(
-                    f"Image descriptions merged: {len(all_image_descriptions)} images from {file_extension}"
-                  )
-                  try:
-                    if all_raw_images:
-                      graph_for_images = create_graph_database_connection(credentials)
+                    try:
                       saved_paths = save_image_files(
-                        params.file_name, all_raw_images, all_image_descriptions
+                        params.file_name, batch_images, batch_descriptions
                       )
                       if saved_paths:
                         stored = store_image_nodes(
@@ -482,14 +473,26 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
                         linked = link_images_to_chunks(
                           graph_for_images, params.file_name, saved_paths
                         )
+                        total_stored += stored
+                        total_linked += linked
                         logging.info(
-                          f"Image storage complete: {stored} nodes stored, {linked} chunk links created"
+                          f"Batch saved: {stored} nodes, {linked} links"
                         )
-                  except Exception as img_err:
-                    logging.warning(f"Image storage to Neo4j failed (non-fatal): {img_err}")
+                    except Exception as img_err:
+                      logging.warning(f"Image storage batch failed (non-fatal): {img_err}")
 
-                  del all_raw_images
+                    logging.info(f"Batch described: {len(batch_descriptions)}/{len(batch_images)} images")
+
+                  del batch_images, batch_descriptions
                   gc.collect()
+
+                if total_descriptions > 0:
+                  logging.info(
+                    f"Image descriptions merged: {total_descriptions} images from {file_extension}"
+                  )
+                  logging.info(
+                    f"Image storage complete: {total_stored} nodes stored, {total_linked} chunk links created"
+                  )
           except Exception as e:
             logging.warning(f"Image processing failed, continuing with text only: {e}")
 

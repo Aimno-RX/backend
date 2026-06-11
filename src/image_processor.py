@@ -106,108 +106,56 @@ def encode_image_to_base64(image_bytes: bytes) -> str:
     return base64.b64encode(image_bytes).decode("utf-8")
 
 
-def extract_images_from_docx(file_path: str, max_total: int = 0) -> List[dict]:
+def _parse_docx_image_map(file_path):
     """
-    Extract embedded images from a .docx Word document.
-
-    Args:
-        file_path: Path to the .docx file.
-        max_total: Maximum total images to extract. 0 or negative means no limit.
-
-    Returns:
-        List of dicts: {paragraph_index, image_bytes, original_bytes, extension, index}
-        image_bytes: resized for LLM (max 2048px)
-        original_bytes: original bytes for file storage
+    Parse docx ZIP to build rId -> (zip_path, extension) map and paragraph blip order.
+    Never loads image bytes into memory. Returns (image_rel_map, ordered_blips).
+    image_rel_map: {rId: (zip_internal_path, extension)}
+    ordered_blips: [(para_idx, rId), ...] in document order
     """
-    try:
-        from docx import Document
-        from lxml import etree
-    except ImportError as e:
-        logging.warning(f"Cannot extract docx images: {e}")
-        return []
-
-    images = []
-    doc = Document(file_path)
+    import zipfile
+    from lxml import etree
 
     nsmap = {
-        'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
-        'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
-        'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
         'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
-        'pic': 'http://schemas.openxmlformats.org/drawingml/2006/picture',
+        'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
     }
 
-    image_part_map = {}
-    for rel in doc.part.rels.values():
-        if "image" in rel.reltype:
-            image_part_map[rel.rId] = {
-                "blob": rel.target_part.blob,
-                "ext": rel.target_part.content_type.split("/")[-1],
-            }
+    with zipfile.ZipFile(file_path, 'r') as zf:
+        rels_xml = zf.read('word/_rels/document.xml.rels')
+        doc_xml = zf.read('word/document.xml')
 
-    limit = max_total if max_total and max_total > 0 else float('inf')
+    rels_tree = etree.fromstring(rels_xml)
+    image_rel_map = {}
+    for rel in rels_tree:
+        rel_type = rel.get('Type', '')
+        if 'image' in rel_type:
+            rId = rel.get('Id')
+            target = rel.get('Target')
+            ext = target.rsplit('.', 1)[-1] if '.' in target else 'png'
+            image_rel_map[rId] = (f'word/{target}', ext)
 
-    for para_idx, paragraph in enumerate(doc.paragraphs):
-        if len(images) >= limit:
-            break
-        para_xml = paragraph._element
-        blips = para_xml.findall('.//' + etree.QName(nsmap['a'], 'blip').text, nsmap)
-        if blips is None:
-            continue
+    doc_tree = etree.fromstring(doc_xml)
+    ordered_blips = []
+    for para_idx, para in enumerate(doc_tree.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p')):
+        for blip in para.iter('{http://schemas.openxmlformats.org/drawingml/2006/main}blip'):
+            rid = blip.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+            if rid and rid in image_rel_map:
+                ordered_blips.append((para_idx, rid))
 
-        for blip in blips:
-            if len(images) >= limit:
-                break
-            embed = blip.get(etree.QName(nsmap['r'], 'embed').text)
-            if embed and embed in image_part_map:
-                img_info = image_part_map[embed]
-                original_bytes = img_info["blob"]
-                if len(original_bytes) < MIN_IMAGE_BYTES:
-                    continue
-                ext = img_info["ext"].lower()
-                if ext in SKIP_IMAGE_EXTENSIONS:
-                    logging.info(f"Skipping EMF/WMF image at p{para_idx} (unsupported format)")
-                    continue
-                try:
-                    resized_bytes = _resize_image_if_needed(original_bytes)
-                except Exception as e:
-                    logging.warning(f"Skipping unreadable image at p{para_idx}: {e}")
-                    continue
-                images.append({
-                    "paragraph_index": para_idx,
-                    "image_bytes": resized_bytes,
-                    "original_bytes": original_bytes,
-                    "extension": img_info["ext"],
-                    "index": len(images),
-                })
-
-    logging.info(f"Extracted {len(images)} images from docx, {len(doc.paragraphs)} paragraphs")
-    return images
+    return image_rel_map, ordered_blips
 
 
 def count_images_in_docx(file_path: str) -> int:
     """
-    Lightweight scan to count images in a docx without loading image bytes.
-    Only scans paragraph XML for blip elements.
+    Lightweight count of images in docx. Parses XML only, no image bytes loaded.
     """
     try:
-        from docx import Document
-        from lxml import etree
-    except ImportError:
+        _, ordered_blips = _parse_docx_image_map(file_path)
+        return len(ordered_blips)
+    except Exception as e:
+        logging.warning(f"Failed to count docx images: {e}")
         return 0
-
-    doc = Document(file_path)
-    nsmap = {
-        'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
-    }
-    count = 0
-    for paragraph in doc.paragraphs:
-        blips = paragraph._element.findall(
-            './/' + etree.QName(nsmap['a'], 'blip').text, nsmap
-        )
-        if blips:
-            count += len(blips)
-    return count
 
 
 def extract_images_from_docx_batch(
@@ -216,80 +164,65 @@ def extract_images_from_docx_batch(
     batch_size: int = 20,
 ) -> List[dict]:
     """
-    Extract a specific batch of images from a docx.
-    Only keeps batch_size images in memory at a time.
+    Extract a batch of images directly from docx ZIP.
+    Only loads batch_size images into memory at a time.
     """
-    try:
-        from docx import Document
-        from lxml import etree
-    except ImportError as e:
-        logging.warning(f"Cannot extract docx images: {e}")
+    import zipfile
+
+    image_rel_map, ordered_blips = _parse_docx_image_map(file_path)
+
+    batch_blips = ordered_blips[start_offset:start_offset + batch_size]
+
+    if not batch_blips:
         return []
 
-    doc = Document(file_path)
-
-    nsmap = {
-        'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
-        'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
-        'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
-        'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
-        'pic': 'http://schemas.openxmlformats.org/drawingml/2006/picture',
-    }
-
-    image_part_map = {}
-    for rel in doc.part.rels.values():
-        if "image" in rel.reltype:
-            image_part_map[rel.rId] = {
-                "blob": rel.target_part.blob,
-                "ext": rel.target_part.content_type.split("/")[-1],
-            }
+    needed_paths = set()
+    rid_to_para = {}
+    for para_idx, rid in batch_blips:
+        if rid in image_rel_map:
+            zip_path, _ = image_rel_map[rid]
+            needed_paths.add(zip_path)
+            rid_to_para[rid] = para_idx
 
     images = []
-    skipped = 0
-    global_idx = 0
+    with zipfile.ZipFile(file_path, 'r') as zf:
+        for para_idx, rid in batch_blips:
+            if rid not in image_rel_map:
+                continue
+            zip_path, ext = image_rel_map[rid]
+            try:
+                original_bytes = zf.read(zip_path)
+            except KeyError:
+                continue
+            if len(original_bytes) < MIN_IMAGE_BYTES:
+                continue
+            ext_lower = ext.lower()
+            if ext_lower in SKIP_IMAGE_EXTENSIONS:
+                continue
+            try:
+                resized_bytes = _resize_image_if_needed(original_bytes)
+            except Exception as e:
+                logging.warning(f"Skipping unreadable image at p{para_idx}: {e}")
+                continue
+            images.append({
+                "paragraph_index": rid_to_para[rid],
+                "image_bytes": resized_bytes,
+                "original_bytes": original_bytes,
+                "extension": ext,
+                "index": start_offset + len(images),
+            })
 
-    for para_idx, paragraph in enumerate(doc.paragraphs):
-        if len(images) >= batch_size:
-            break
-        para_xml = paragraph._element
-        blips = para_xml.findall('.//' + etree.QName(nsmap['a'], 'blip').text, nsmap)
-        if blips is None:
-            continue
-
-        for blip in blips:
-            if len(images) >= batch_size:
-                break
-            embed = blip.get(etree.QName(nsmap['r'], 'embed').text)
-            if embed and embed in image_part_map:
-                img_info = image_part_map[embed]
-                original_bytes = img_info["blob"]
-                if len(original_bytes) < MIN_IMAGE_BYTES:
-                    global_idx += 1
-                    continue
-                ext = img_info["ext"].lower()
-                if ext in SKIP_IMAGE_EXTENSIONS:
-                    global_idx += 1
-                    continue
-
-                if global_idx < start_offset:
-                    global_idx += 1
-                    continue
-
-                global_idx += 1
-                try:
-                    resized_bytes = _resize_image_if_needed(original_bytes)
-                except Exception as e:
-                    logging.warning(f"Skipping unreadable image at p{para_idx}: {e}")
-                    continue
-                images.append({
-                    "paragraph_index": para_idx,
-                    "image_bytes": resized_bytes,
-                    "original_bytes": original_bytes,
-                    "extension": img_info["ext"],
-                    "index": start_offset + len(images),
-                })
-
+    logging.info(f"Extracted batch of {len(images)} images from docx (offset={start_offset})")
     return images
+
+
+def extract_images_from_docx(file_path: str, max_total: int = 0) -> List[dict]:
+    """
+    Extract embedded images from a .docx Word document.
+    """
+    if max_total and max_total > 0:
+        return extract_images_from_docx_batch(file_path, start_offset=0, batch_size=max_total)
+    return extract_images_from_docx_batch(file_path, start_offset=0, batch_size=999999)
 
 
 def extract_images_from_doc(file_path: str) -> List[dict]:

@@ -749,6 +749,14 @@ async def processing_source(credentials, params, pages, merged_file_path=None, i
   rel_count = 0
       
   if len(result) > 0:
+    if result[0]['Status'] == 'Processing' and params.retry_condition == DELETE_ENTITIES_AND_START_FROM_BEGINNING:
+      graph.query(
+        "MATCH (d:Document {fileName: $fn}) SET d.status = 'Completed'",
+        {"fn": params.file_name}
+      )
+      result = graphDb_data_Access.get_current_status_document_node(params.file_name)
+      logging.info(f"Reset stuck 'Processing' status to 'Completed' for retry: {params.file_name}")
+
     if result[0]['Status'] != 'Processing':      
       obj_source_node = sourceNode()
       status = "Processing"

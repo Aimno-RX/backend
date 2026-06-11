@@ -390,94 +390,106 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
             )
             from src.image_storage import save_image_files, store_image_nodes, link_images_to_chunks
 
-            max_images = get_adaptive_max_images()
-            logging.info(f"Adaptive max_images={max_images} (env VISION_MAX_IMAGES overrides auto-detect)")
+            graph_check = create_graph_database_connection(credentials)
+            check_result = graph_check.query(
+                "MATCH (i:ExerciseImage {fileName: $fn}) RETURN count(i) AS cnt",
+                fn=params.file_name,
+            )
+            existing_count = check_result[0]["cnt"] if check_result else 0
 
-            total_images = count_images_in_docx(merged_file_path)
-            logging.info(f"Total images in docx: {total_images}")
+            if existing_count > 0:
+              logging.info(
+                f"Skipping image processing: {existing_count} ExerciseImage nodes already exist for {params.file_name}"
+              )
+            else:
+              max_images = get_adaptive_max_images()
+              logging.info(f"Adaptive max_images={max_images} (env VISION_MAX_IMAGES overrides auto-detect)")
 
-            if total_images > 0:
-              batch_size = max_images
-              all_image_descriptions = []
-              all_raw_images = []
+              total_images = count_images_in_docx(merged_file_path)
+              logging.info(f"Total images in docx: {total_images}")
 
-              page_text_map = {}
-              if pages:
-                for i, p in enumerate(pages):
-                  pn = p.metadata.get("page_number", i + 1)
-                  page_text_map[pn] = p.page_content
+              if total_images > 0:
+                batch_size = max_images
+                all_image_descriptions = []
+                all_raw_images = []
 
-              for start_offset in range(0, total_images, batch_size):
-                current_batch = min(batch_size, total_images - start_offset)
-                logging.info(
-                  f"Processing batch {start_offset+1}-{start_offset+current_batch}/{total_images}"
-                )
+                page_text_map = {}
+                if pages:
+                  for i, p in enumerate(pages):
+                    pn = p.metadata.get("page_number", i + 1)
+                    page_text_map[pn] = p.page_content
 
-                batch_images = extract_images_from_docx_batch(
-                    merged_file_path, start_offset=start_offset,
-                    batch_size=batch_size,
-                )
+                for start_offset in range(0, total_images, batch_size):
+                  current_batch = min(batch_size, total_images - start_offset)
+                  logging.info(
+                    f"Processing batch {start_offset+1}-{start_offset+current_batch}/{total_images}"
+                  )
 
-                batch_descriptions = []
-                for img in batch_images:
+                  batch_images = extract_images_from_docx_batch(
+                      merged_file_path, start_offset=start_offset,
+                      batch_size=batch_size,
+                  )
+
+                  batch_descriptions = []
+                  for img in batch_images:
+                    try:
+                      para_idx = img.get("paragraph_index", 0)
+                      context = _get_paragraph_context(pages, para_idx) if pages else ""
+                      ext = img.get("extension", "png").lower()
+                      if ext in SKIP_IMAGE_EXTENSIONS:
+                          continue
+                      b64 = encode_image_to_base64(img["image_bytes"])
+                      description = describe_image(
+                          vision_llm=vision_llm,
+                          base64_image=b64,
+                          image_format=ext,
+                          page_context=context,
+                          page_number=img.get("paragraph_index", 0),
+                          image_index=img["index"],
+                      )
+                      if description:
+                        batch_descriptions.append({
+                            "description": description,
+                            "image_index": img["index"],
+                            "paragraph_index": para_idx,
+                        })
+                    except Exception as e:
+                      logging.warning(f"Failed to describe image {img.get('index', '?')}: {e}")
+
+                  if batch_descriptions:
+                    all_image_descriptions.extend(batch_descriptions)
+                    pages = merge_image_descriptions_into_pages(pages, batch_descriptions)
+                    all_raw_images.extend(batch_images)
+                    logging.info(f"Batch described: {len(batch_descriptions)}/{len(batch_images)} images")
+
+                  del batch_images, batch_descriptions
+                  gc.collect()
+
+                if all_image_descriptions:
+                  logging.info(
+                    f"Image descriptions merged: {len(all_image_descriptions)} images from {file_extension}"
+                  )
                   try:
-                    para_idx = img.get("paragraph_index", 0)
-                    context = _get_paragraph_context(pages, para_idx) if pages else ""
-                    ext = img.get("extension", "png").lower()
-                    if ext in SKIP_IMAGE_EXTENSIONS:
-                        continue
-                    b64 = encode_image_to_base64(img["image_bytes"])
-                    description = describe_image(
-                        vision_llm=vision_llm,
-                        base64_image=b64,
-                        image_format=ext,
-                        page_context=context,
-                        page_number=img.get("paragraph_index", 0),
-                        image_index=img["index"],
-                    )
-                    if description:
-                      batch_descriptions.append({
-                          "description": description,
-                          "image_index": img["index"],
-                          "paragraph_index": para_idx,
-                      })
-                  except Exception as e:
-                    logging.warning(f"Failed to describe image {img.get('index', '?')}: {e}")
-
-                if batch_descriptions:
-                  all_image_descriptions.extend(batch_descriptions)
-                  pages = merge_image_descriptions_into_pages(pages, batch_descriptions)
-                  all_raw_images.extend(batch_images)
-                  logging.info(f"Batch described: {len(batch_descriptions)}/{len(batch_images)} images")
-
-                del batch_images, batch_descriptions
-                gc.collect()
-
-              if all_image_descriptions:
-                logging.info(
-                  f"Image descriptions merged: {len(all_image_descriptions)} images from {file_extension}"
-                )
-                try:
-                  if all_raw_images:
-                    graph_for_images = create_graph_database_connection(credentials)
-                    saved_paths = save_image_files(
-                      params.file_name, all_raw_images, all_image_descriptions
-                    )
-                    if saved_paths:
-                      stored = store_image_nodes(
-                        graph_for_images, params.file_name, saved_paths
+                    if all_raw_images:
+                      graph_for_images = create_graph_database_connection(credentials)
+                      saved_paths = save_image_files(
+                        params.file_name, all_raw_images, all_image_descriptions
                       )
-                      linked = link_images_to_chunks(
-                        graph_for_images, params.file_name, saved_paths
-                      )
-                      logging.info(
-                        f"Image storage complete: {stored} nodes stored, {linked} chunk links created"
-                      )
-                except Exception as img_err:
-                  logging.warning(f"Image storage to Neo4j failed (non-fatal): {img_err}")
+                      if saved_paths:
+                        stored = store_image_nodes(
+                          graph_for_images, params.file_name, saved_paths
+                        )
+                        linked = link_images_to_chunks(
+                          graph_for_images, params.file_name, saved_paths
+                        )
+                        logging.info(
+                          f"Image storage complete: {stored} nodes stored, {linked} chunk links created"
+                        )
+                  except Exception as img_err:
+                    logging.warning(f"Image storage to Neo4j failed (non-fatal): {img_err}")
 
-                del all_raw_images
-                gc.collect()
+                  del all_raw_images
+                  gc.collect()
           except Exception as e:
             logging.warning(f"Image processing failed, continuing with text only: {e}")
 

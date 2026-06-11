@@ -362,7 +362,7 @@ def get_adaptive_max_images():
 async def extract_graph_from_file_local_file(credentials, params, merged_file_path):
 
   logging.info(f'Process file name :{params.file_name} from local file system')
-  if params.retry_condition in ["", None] or params.retry_condition not in [DELETE_ENTITIES_AND_START_FROM_BEGINNING, START_FROM_LAST_PROCESSED_POSITION]:
+  if params.retry_condition in ["", None, DELETE_ENTITIES_AND_START_FROM_BEGINNING] or params.retry_condition not in [DELETE_ENTITIES_AND_START_FROM_BEGINNING, START_FROM_LAST_PROCESSED_POSITION]:
     file_extension = ""
     if GCS_FILE_CACHE:
       folder_name = create_gcs_bucket_folder_name_hashed(credentials.uri, params.file_name)
@@ -393,7 +393,7 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
             graph_check = create_graph_database_connection(credentials)
             check_result = graph_check.query(
                 "MATCH (i:ExerciseImage {fileName: $fn}) RETURN count(i) AS cnt",
-                fn=params.file_name,
+                {"fn": params.file_name},
             )
             existing_count = check_result[0]["cnt"] if check_result else 0
 
@@ -1025,7 +1025,7 @@ def get_chunkId_chunkDoc_list(graph, file_name, pages, token_chunk_size, chunk_o
   Returns:
       tuple: (total_chunks, chunkId_chunkDoc_list)
   """
-  if retry_condition in ["", None] or retry_condition not in [DELETE_ENTITIES_AND_START_FROM_BEGINNING, START_FROM_LAST_PROCESSED_POSITION]:
+  if retry_condition in ["", None, DELETE_ENTITIES_AND_START_FROM_BEGINNING] or retry_condition not in [DELETE_ENTITIES_AND_START_FROM_BEGINNING, START_FROM_LAST_PROCESSED_POSITION]:
     logging.info("Break down file into chunks")
     bad_chars = ['"', "\n", "'"]
     for i in range(0,len(pages)):

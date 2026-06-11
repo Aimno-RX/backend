@@ -383,24 +383,29 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
         vision_llm = get_vision_llm(vision_model)
         if vision_llm:
           try:
-            from src.image_processor import extract_images_from_document
+            from src.image_processor import (
+                extract_images_from_docx_batch, count_images_in_docx,
+                encode_image_to_base64, describe_image, SKIP_IMAGE_EXTENSIONS,
+                _get_paragraph_context,
+            )
             from src.image_storage import save_image_files, store_image_nodes, link_images_to_chunks
 
             max_images = get_adaptive_max_images()
             logging.info(f"Adaptive max_images={max_images} (env VISION_MAX_IMAGES overrides auto-detect)")
 
-            raw_images, source_type = extract_images_from_document(
-                merged_file_path, file_extension, max_total=0
-            )
-            total_images = len(raw_images) if raw_images else 0
-            del raw_images
-            gc.collect()
-            logging.info(f"Extracted total {total_images} images from {file_extension}")
+            total_images = count_images_in_docx(merged_file_path)
+            logging.info(f"Total images in docx: {total_images}")
 
             if total_images > 0:
               batch_size = max_images
               all_image_descriptions = []
               all_raw_images = []
+
+              page_text_map = {}
+              if pages:
+                for i, p in enumerate(pages):
+                  pn = p.metadata.get("page_number", i + 1)
+                  page_text_map[pn] = p.page_content
 
               for start_offset in range(0, total_images, batch_size):
                 current_batch = min(batch_size, total_images - start_offset)
@@ -408,27 +413,44 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
                   f"Processing batch {start_offset+1}-{start_offset+current_batch}/{total_images}"
                 )
 
-                batch_descriptions = process_document_images(
-                  file_path=merged_file_path,
-                  file_extension=file_extension,
-                  vision_llm=vision_llm,
-                  pages=pages,
-                  max_images=max_images,
-                  start_offset=start_offset,
-                  batch_size=batch_size,
+                batch_images = extract_images_from_docx_batch(
+                    merged_file_path, start_offset=start_offset,
+                    batch_size=batch_size,
                 )
+
+                batch_descriptions = []
+                for img in batch_images:
+                  try:
+                    para_idx = img.get("paragraph_index", 0)
+                    context = _get_paragraph_context(pages, para_idx) if pages else ""
+                    ext = img.get("extension", "png").lower()
+                    if ext in SKIP_IMAGE_EXTENSIONS:
+                        continue
+                    b64 = encode_image_to_base64(img["image_bytes"])
+                    description = describe_image(
+                        vision_llm=vision_llm,
+                        base64_image=b64,
+                        image_format=ext,
+                        page_context=context,
+                        page_number=img.get("paragraph_index", 0),
+                        image_index=img["index"],
+                    )
+                    if description:
+                      batch_descriptions.append({
+                          "description": description,
+                          "image_index": img["index"],
+                          "paragraph_index": para_idx,
+                      })
+                  except Exception as e:
+                    logging.warning(f"Failed to describe image {img.get('index', '?')}: {e}")
 
                 if batch_descriptions:
                   all_image_descriptions.extend(batch_descriptions)
                   pages = merge_image_descriptions_into_pages(pages, batch_descriptions)
+                  all_raw_images.extend(batch_images)
+                  logging.info(f"Batch described: {len(batch_descriptions)}/{len(batch_images)} images")
 
-                batch_raw, _ = extract_images_from_document(
-                  merged_file_path, file_extension,
-                  max_total=max_images, start_offset=start_offset, batch_size=batch_size
-                )
-                if batch_raw:
-                  all_raw_images.extend(batch_raw)
-                del batch_raw, batch_descriptions
+                del batch_images, batch_descriptions
                 gc.collect()
 
               if all_image_descriptions:

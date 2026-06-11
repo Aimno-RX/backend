@@ -185,6 +185,113 @@ def extract_images_from_docx(file_path: str, max_total: int = 0) -> List[dict]:
     return images
 
 
+def count_images_in_docx(file_path: str) -> int:
+    """
+    Lightweight scan to count images in a docx without loading image bytes.
+    Only scans paragraph XML for blip elements.
+    """
+    try:
+        from docx import Document
+        from lxml import etree
+    except ImportError:
+        return 0
+
+    doc = Document(file_path)
+    nsmap = {
+        'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+    }
+    count = 0
+    for paragraph in doc.paragraphs:
+        blips = paragraph._element.findall(
+            './/' + etree.QName(nsmap['a'], 'blip').text, nsmap
+        )
+        if blips:
+            count += len(blips)
+    return count
+
+
+def extract_images_from_docx_batch(
+    file_path: str,
+    start_offset: int = 0,
+    batch_size: int = 20,
+) -> List[dict]:
+    """
+    Extract a specific batch of images from a docx.
+    Only keeps batch_size images in memory at a time.
+    """
+    try:
+        from docx import Document
+        from lxml import etree
+    except ImportError as e:
+        logging.warning(f"Cannot extract docx images: {e}")
+        return []
+
+    doc = Document(file_path)
+
+    nsmap = {
+        'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+        'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
+        'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+        'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+        'pic': 'http://schemas.openxmlformats.org/drawingml/2006/picture',
+    }
+
+    image_part_map = {}
+    for rel in doc.part.rels.values():
+        if "image" in rel.reltype:
+            image_part_map[rel.rId] = {
+                "blob": rel.target_part.blob,
+                "ext": rel.target_part.content_type.split("/")[-1],
+            }
+
+    images = []
+    skipped = 0
+    global_idx = 0
+
+    for para_idx, paragraph in enumerate(doc.paragraphs):
+        if len(images) >= batch_size:
+            break
+        para_xml = paragraph._element
+        blips = para_xml.findall('.//' + etree.QName(nsmap['a'], 'blip').text, nsmap)
+        if blips is None:
+            continue
+
+        for blip in blips:
+            if len(images) >= batch_size:
+                break
+            embed = blip.get(etree.QName(nsmap['r'], 'embed').text)
+            if embed and embed in image_part_map:
+                img_info = image_part_map[embed]
+                original_bytes = img_info["blob"]
+                if len(original_bytes) < MIN_IMAGE_BYTES:
+                    global_idx += 1
+                    continue
+                ext = img_info["ext"].lower()
+                if ext in SKIP_IMAGE_EXTENSIONS:
+                    global_idx += 1
+                    continue
+
+                if global_idx < start_offset:
+                    global_idx += 1
+                    continue
+
+                global_idx += 1
+                try:
+                    resized_bytes = _resize_image_if_needed(original_bytes)
+                except Exception as e:
+                    logging.warning(f"Skipping unreadable image at p{para_idx}: {e}")
+                    continue
+                images.append({
+                    "paragraph_index": para_idx,
+                    "image_bytes": resized_bytes,
+                    "original_bytes": original_bytes,
+                    "extension": img_info["ext"],
+                    "index": start_offset + len(images),
+                })
+
+    return images
+
+
 def extract_images_from_doc(file_path: str) -> List[dict]:
     """
     Extract images from a .doc file by converting to PDF via LibreOffice first.
@@ -253,23 +360,26 @@ def extract_images_from_document(
 
     Returns:
         Tuple of (images list, source_type).
-        source_type is 'pdf_page' or 'docx_paragraph'.
     """
     ext = file_extension.lower()
 
     if ext == '.pdf':
         images, source_type = extract_images_from_pdf(file_path), 'pdf_page'
     elif ext == '.docx':
-        images, source_type = extract_images_from_docx(file_path, max_total=max_total), 'docx_paragraph'
+        if batch_size > 0 or start_offset > 0:
+            effective_batch = batch_size if batch_size > 0 else 0
+            images = extract_images_from_docx_batch(
+                file_path, start_offset=start_offset,
+                batch_size=effective_batch if effective_batch > 0 else 0,
+            )
+            source_type = 'docx_paragraph'
+        else:
+            images, source_type = extract_images_from_docx(file_path, max_total=max_total), 'docx_paragraph'
     elif ext == '.doc':
         images, source_type = extract_images_from_doc(file_path), 'pdf_page'
     else:
         logging.info(f"Unsupported format for image extraction: {ext}")
         return [], 'none'
-
-    if start_offset > 0 or batch_size > 0:
-        end = start_offset + batch_size if batch_size > 0 else len(images)
-        images = images[start_offset:end]
 
     return images, source_type
 
@@ -409,6 +519,9 @@ def process_document_images(
         )
         if start_offset > 0:
             images = images[start_offset:]
+
+    if not images:
+        return []
 
     page_text_map = {}
     if pages:

@@ -780,7 +780,9 @@ async def processing_source(credentials, params, pages, merged_file_path=None, i
       tokens_per_file = 0
       for i in range(0, len(chunkId_chunkDoc_list), update_graph_chunk_processed):
         select_chunks_upto = i+update_graph_chunk_processed
-        logging.info(f'Selected Chunks upto: {select_chunks_upto}')
+        total_chunks_count = len(chunkId_chunkDoc_list)
+        pct = min(100, int(select_chunks_upto * 100 / total_chunks_count)) if total_chunks_count > 0 else 0
+        logging.info(f'[{pct}%] Processing chunks {select_chunks_upto}/{total_chunks_count}')
         if len(chunkId_chunkDoc_list) <= select_chunks_upto:
           select_chunks_upto = len(chunkId_chunkDoc_list)
         selected_chunks = chunkId_chunkDoc_list[i:select_chunks_upto]

@@ -12,16 +12,15 @@ ENV PORT=8000 \
 
 EXPOSE 8000
 
-RUN apt-get update && \
+RUN rm -f /etc/apt/sources.list.d/* && \
+    echo 'deb http://mirrors.aliyun.com/debian/ trixie main' > /etc/apt/sources.list && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         libmagic1 \
         libgl1 \
         libglib2.0-0 \
         libglx-mesa0 \
         libgomp1 \
-        libreoffice \
-        poppler-utils \
-        tesseract-ocr \
         cmake \
         gcc \
         g++ \
@@ -34,10 +33,12 @@ RUN apt-get update && \
 COPY constraints.txt /code/
 COPY requirements.txt /code/
 
-RUN pip install --upgrade pip setuptools wheel && \
+RUN pip install --upgrade pip setuptools wheel -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com && \
     pip install \
         --constraint /code/constraints.txt \
         --extra-index-url https://download.pytorch.org/whl/cpu \
+        -i https://mirrors.aliyun.com/pypi/simple/ \
+        --trusted-host mirrors.aliyun.com \
         -r /code/requirements.txt && \
     rm -rf /root/.cache/pip
 
@@ -47,13 +48,10 @@ RUN python -m nltk.downloader -d /usr/local/nltk_data punkt && \
 
 COPY . /code/
 
-
 RUN sed -i 's/from langchain_classic\.retrievers/from langchain.retrievers/g' /code/src/QA_integration.py && \
     sed -i 's/from langchain_classic\.retrievers\.document_compressors/from langchain.retrievers.document_compressors/g' /code/src/QA_integration.py && \
     sed -i 's/from langchain_huggingface/from langchain_community.embeddings/g' /code/src/shared/common_fn.py && \
     sed -i 's/from langchain_google_vertexai/from langchain_community.embeddings/g' /code/src/shared/common_fn.py
- 
-
 
 RUN mkdir -p /code/chunks /code/merged_files /code/local_model /data/images && \
     chmod -R 755 /code /data

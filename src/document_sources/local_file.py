@@ -1,10 +1,17 @@
 import logging
 import os
+import zipfile
 from pathlib import Path
 import chardet
-from langchain_community.document_loaders import PyMuPDFLoader, UnstructuredFileLoader
+from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_core.documents import Document
 from langchain_core.document_loaders import BaseLoader
+
+try:
+    from lxml import etree
+    HAS_LXML = True
+except ImportError:
+    HAS_LXML = False
 
 # 配置常量
 MAX_FILE_SIZE_MB = 2048  # 2GB 限制
@@ -88,6 +95,7 @@ def load_document_content(file_path):
         encoding = detect_encoding(file_path)
         logging.info("Detected encoding for text file: %s", encoding)
         if encoding.lower() == "utf-8":
+            from langchain_community.document_loaders import UnstructuredFileLoader
             loader = UnstructuredFileLoader(file_path, mode="elements", autodetect_encoding=True)
             return loader, encoding_flag
         with open(file_path, encoding=encoding, errors="replace") as f:
@@ -96,41 +104,70 @@ def load_document_content(file_path):
         encoding_flag = True
         return loader, encoding_flag
     
-    # DOCX 等文档处理 - 针对大文件和包含图片的文档优化
+    # DOCX 文件处理 - 使用 zipfile + lxml 直接提取文本，避免 UnstructuredFileLoader 卡死
     if file_extension in ['.docx', '.doc']:
-        # 对于大于10MB的文档，使用快速策略跳过图片处理
-        if size_mb > 10:
-            logging.info(f"大文件检测 ({size_mb:.2f}MB)，使用快速文本提取策略（跳过图片）")
-            try:
-                # 使用 fast 策略，跳过图片和复杂格式
-                loader = UnstructuredFileLoader(
-                    file_path, 
-                    mode="elements",
-                    strategy="fast",  # 快速策略，只提取文本
-                    autodetect_encoding=True
-                )
-                return loader, encoding_flag
-            except Exception as e:
-                logging.warning(f"快速策略失败，尝试基础策略: {e}")
-                # 如果快速策略失败，使用最基础的策略
-                loader = UnstructuredFileLoader(
-                    file_path,
-                    mode="elements",
-                    autodetect_encoding=True
-                )
-                return loader, encoding_flag
-        else:
-            # 小文件使用标准策略
-            loader = UnstructuredFileLoader(
-                file_path,
-                mode="elements",
-                autodetect_encoding=True
-            )
-            return loader, encoding_flag
+        logging.info(f"使用 zipfile+lxml 直接提取 docx 文本: {file_path}")
+        pages = _extract_docx_text_via_zip(file_path)
+        loader = ListLoader(pages)
+        return loader, encoding_flag
     
     # 其他文件类型
+    from langchain_community.document_loaders import UnstructuredFileLoader
     loader = UnstructuredFileLoader(file_path, mode="elements", autodetect_encoding=True)
     return loader, encoding_flag
+
+
+def _extract_docx_text_via_zip(file_path):
+    """
+    使用 zipfile + lxml 从 docx 中直接提取文本段落。
+    绕过 UnstructuredFileLoader，避免大文件卡死。
+    """
+    pages = []
+    try:
+        with zipfile.ZipFile(str(file_path), 'r') as z:
+            with z.open('word/document.xml') as f:
+                tree = etree.parse(f)
+
+        nsmap = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        paragraphs = tree.findall('.//w:p', nsmap)
+
+        page_num = 1
+        page_texts = []
+        chars_in_page = 0
+        MAX_CHARS_PER_PAGE = 3000
+
+        for para in paragraphs:
+            texts = para.findall('.//w:t', nsmap)
+            para_text = ''.join((t.text or '') for t in texts).strip()
+            if not para_text:
+                continue
+
+            page_texts.append(para_text)
+            chars_in_page += len(para_text)
+
+            if chars_in_page >= MAX_CHARS_PER_PAGE:
+                combined = '\n'.join(page_texts)
+                pages.append(Document(
+                    page_content=combined,
+                    metadata={"source": str(file_path), "page_number": page_num, "filename": Path(file_path).name}
+                ))
+                page_num += 1
+                page_texts = []
+                chars_in_page = 0
+
+        if page_texts:
+            combined = '\n'.join(page_texts)
+            pages.append(Document(
+                page_content=combined,
+                metadata={"source": str(file_path), "page_number": page_num, "filename": Path(file_path).name}
+            ))
+
+        logging.info(f"docx 文本提取完成: {len(pages)} 页, {sum(len(p.page_content) for p in pages)} 字符")
+    except Exception as e:
+        logging.error(f"zipfile+lxml 提取 docx 文本失败: {e}")
+        raise
+
+    return pages
 
 def get_documents_from_file_by_path(file_path, file_name):
     """
@@ -157,7 +194,9 @@ def get_documents_from_file_by_path(file_path, file_name):
         loader, encoding_flag = load_document_content(file_path)
         file_extension = file_path.suffix.lower()
         
-        if file_extension == ".pdf" or (file_extension == ".txt" and encoding_flag):
+        if file_extension in ['.docx', '.doc']:
+            pages = loader.load()
+        elif file_extension == ".pdf" or (file_extension == ".txt" and encoding_flag):
             pages = loader.load()
         else:
             unstructured_pages = loader.load()

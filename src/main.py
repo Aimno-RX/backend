@@ -391,7 +391,7 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
                 encode_image_to_base64, describe_image, SKIP_IMAGE_EXTENSIONS,
                 _get_paragraph_context,
             )
-            from src.image_storage import save_image_files, store_image_nodes, link_images_to_chunks
+            from src.image_storage import save_image_files, store_image_nodes
 
             graph_check = create_graph_database_connection(credentials)
             check_result = graph_check.query(
@@ -415,7 +415,6 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
                 batch_size = max_images
                 total_descriptions = 0
                 total_stored = 0
-                total_linked = 0
 
                 page_text_map = {}
                 if pages:
@@ -473,13 +472,9 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
                         stored = store_image_nodes(
                           graph_for_images, params.file_name, saved_paths
                         )
-                        linked = link_images_to_chunks(
-                          graph_for_images, params.file_name, saved_paths
-                        )
                         total_stored += stored
-                        total_linked += linked
                         logging.info(
-                          f"Batch saved: {stored} nodes, {linked} links"
+                          f"Batch saved: {stored} nodes"
                         )
                     except Exception as img_err:
                       logging.warning(f"Image storage batch failed (non-fatal): {img_err}")
@@ -494,7 +489,7 @@ async def extract_graph_from_file_local_file(credentials, params, merged_file_pa
                     f"Image descriptions merged: {total_descriptions} images from {file_extension}"
                   )
                   logging.info(
-                    f"Image storage complete: {total_stored} nodes stored, {total_linked} chunk links created"
+                    f"Image storage complete: {total_stored} nodes stored"
                   )
           except Exception as e:
             logging.warning(f"Image processing failed, continuing with text only: {e}")
@@ -745,6 +740,26 @@ async def processing_source(credentials, params, pages, merged_file_path=None, i
   logging.info(f'Time taken to create list chunkids with chunk document: {elapsed_get_chunkId_chunkDoc_list:.2f} seconds')
   uri_latency["create_list_chunk_and_document"] = f'{elapsed_get_chunkId_chunkDoc_list:.2f}'
   uri_latency["total_chunks"] = total_chunks
+
+  try:
+    link_result = graph.query(
+      """
+      MATCH (img:ExerciseImage {fileName: $fn})
+      MATCH (c:Chunk {fileName: $fn})
+      WHERE c.position IS NOT NULL
+      WITH img, c
+      ORDER BY ABS(c.position - img.paragraphIndex) ASC
+      WITH img, collect(c)[0] AS nearest_chunk
+      MERGE (img)-[:ILLUSTRATES]->(nearest_chunk)
+      RETURN count(*) AS linked
+      """,
+      {"fn": params.file_name},
+    )
+    linked_count = link_result[0]["linked"] if link_result else 0
+    if linked_count > 0:
+      logging.info(f"Linked {linked_count} ExerciseImage nodes to Chunks after chunk creation")
+  except Exception as e:
+    logging.warning(f"Failed to link images to chunks after chunk creation: {e}")
 
   start_status_document_node = time.time()
   result = graphDb_data_Access.get_current_status_document_node(params.file_name)

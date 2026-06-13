@@ -175,6 +175,7 @@ def format_documents(documents, model,chat_mode_settings):
     sources = set()
     entities = dict()
     global_communities = list()
+    all_images = list()
 
 
     for doc in sorted_documents:
@@ -196,6 +197,11 @@ def format_documents(documents, model,chat_mode_settings):
                 new_entries = [entry for entry in doc.metadata["communitydetails"] if entry['id'] not in existing_ids]
                 global_communities.extend(new_entries)
 
+            if 'images' in doc.metadata:
+                for img in doc.metadata['images']:
+                    if img and img.get('imageUrl') not in [i.get('imageUrl') for i in all_images]:
+                        all_images.append(img)
+
             formatted_doc = (
                 "Document start\n"
                 f"This Document belongs to the source {source}\n"
@@ -207,13 +213,13 @@ def format_documents(documents, model,chat_mode_settings):
         except Exception as e:
             logging.error(f"Error formatting document: {e}")
     
-    return "\n\n".join(formatted_docs), sources,entities,global_communities
+    return "\n\n".join(formatted_docs), sources, entities, global_communities, all_images
 
 def process_documents(docs, question, messages, llm, model,chat_mode_settings):
     start_time = time.time()
     
     try:
-        formatted_docs, sources, entitydetails, communities = format_documents(docs, model,chat_mode_settings)
+        formatted_docs, sources, entitydetails, communities, images = format_documents(docs, model,chat_mode_settings)
         
         rag_chain = get_rag_chain(llm=llm)
         
@@ -223,7 +229,7 @@ def process_documents(docs, question, messages, llm, model,chat_mode_settings):
             "input": question
         })
 
-        result = {'sources': list(), 'nodedetails': dict(), 'entities': dict()}
+        result = {'sources': list(), 'nodedetails': dict(), 'entities': dict(), 'images': list()}
         node_details = {"chunkdetails":list(),"entitydetails":list(),"communitydetails":list()}
         entities = {'entityids':list(),"relationshipids":list()}
 
@@ -240,6 +246,7 @@ def process_documents(docs, question, messages, llm, model,chat_mode_settings):
 
         result["nodedetails"] = node_details
         result["entities"] = entities
+        result["images"] = images
 
         content = ai_response.content
         total_tokens = get_total_tokens(ai_response, llm)
@@ -467,6 +474,7 @@ def process_chat_response(messages, history, question, model, graph, document_na
                 "mode": chat_mode_settings["mode"],
                 "entities": result["entities"],
                 "metric_details": metric_details,
+                "images": result.get("images", []),
             },
             
             "user": "chatbot"

@@ -14,7 +14,7 @@ def get_llm(model: str):
     """Retrieve the specified language model based on the model name.
     优化版本：只支持DeepSeek模型，用于医学知识图谱构建
     """
-    model = model.upper().replace('.', '_').replace(' ', '_').strip()
+    model = model.upper().replace('.', '_').replace(' ', '_').replace('-', '_').strip()
     env_key = f"LLM_MODEL_CONFIG_{model}"
     env_value = get_value_from_env(env_key)
 
@@ -61,7 +61,7 @@ def get_vision_llm(model: str):
     Returns:
         ChatOpenAI: Vision-capable LLM instance configured for image understanding.
     """
-    model = model.upper().replace('.', '_').replace(' ', '_').strip()
+    model = model.upper().replace('.', '_').replace(' ', '_').replace('-', '_').strip()
     env_key = f"LLM_MODEL_CONFIG_{model}"
     env_value = get_value_from_env(env_key)
 

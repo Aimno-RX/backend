@@ -298,7 +298,10 @@ def create_source_node_graph_web_url(graph, params):
 #     success_count+=1
 #     return lst_file_name,success_count,failed_count
 # 
-# def create_source_node_graph_url_wikipedia(graph, params):
+def create_source_node_graph_url_youtube(graph, params):
+    raise LLMGraphBuilderException("YouTube support is disabled")
+
+def create_source_node_graph_url_wikipedia(graph, params):
     """
     Create a source node in the graph for a Wikipedia page.
 
@@ -562,6 +565,9 @@ async def extract_graph_from_web_page(credentials, params):
 #   else:
 #      return await processing_source(credentials, params, [])
 #     
+async def extract_graph_from_file_youtube(credentials, params):
+    raise LLMGraphBuilderException("YouTube support is disabled")
+
 async def extract_graph_from_file_Wikipedia(credentials, params):
   """
   Extract graph data from a Wikipedia page.

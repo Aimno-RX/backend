@@ -312,9 +312,7 @@ def link_images_to_chunks(
     saved_paths: List[Dict],
 ) -> int:
     """
-    将 ExerciseImage 节点与对应的 Chunk 节点关联。
-
-    根据 paragraphIndex 和 Chunk 的 position/content_offset 进行匹配。
+    将 ExerciseImage 节点与对应的 Chunk 节点关联（基于段落位置）。
 
     Args:
         graph: Neo4jGraph 实例
@@ -346,11 +344,110 @@ def link_images_to_chunks(
 
     try:
         execute_graph_query(graph, query, params={"batch_data": batch_data})
-        logger.info(f"Linked {len(batch_data)} ExerciseImage nodes to Chunks")
+        logger.info(f"Linked {len(batch_data)} ExerciseImage nodes to Chunks by position")
         return len(batch_data)
     except Exception as e:
         logger.error(f"Failed to link images to chunks: {e}")
         return 0
+
+
+def link_images_to_chunks_semantic(graph, file_name: str, top_k: int = 3) -> int:
+    """
+    基于语义相似度将 ExerciseImage 节点与 Chunk 节点关联。
+
+    使用 BGE embedding 模型嵌入图片描述，通过 Neo4j 向量索引
+    找到最匹配的 chunk，创建 ILLUSTRATES 关系。
+
+    Args:
+        graph: Neo4jGraph 实例
+        file_name: 文档名称
+        top_k: 每张图片最多链接的 chunk 数量
+
+    Returns:
+        成功创建的关系数
+    """
+    from src.shared.common_fn import execute_graph_query, load_embedding_model, get_value_from_env
+
+    EMBEDDING_MODEL = get_value_from_env("EMBEDDING_MODEL", "sentence_transformer")
+    embeddings, _ = load_embedding_model(EMBEDDING_MODEL)
+
+    try:
+        existing_images = execute_graph_query(
+            graph,
+            "MATCH (img:ExerciseImage {fileName: $fileName}) "
+            "WHERE img.description IS NOT NULL AND img.description <> '' "
+            "RETURN img.id AS id, img.description AS description",
+            params={"fileName": file_name}
+        )
+    except Exception as e:
+        logger.error(f"Failed to query ExerciseImage nodes: {e}")
+        return 0
+
+    if not existing_images:
+        logger.info(f"No ExerciseImage nodes with description found for {file_name}")
+        return 0
+
+    try:
+        execute_graph_query(
+            graph,
+            "MATCH (img:ExerciseImage {fileName: $fileName})-[r:ILLUSTRATES]->() DELETE r",
+            params={"fileName": file_name}
+        )
+        logger.info(f"Cleared old ILLUSTRATES relationships for {file_name}")
+    except Exception as e:
+        logger.warning(f"Failed to clear old ILLUSTRATES: {e}")
+
+    linked_count = 0
+    for img_node in existing_images:
+        img_id = img_node["id"]
+        description = img_node["description"]
+
+        short_desc = description[:500]
+        try:
+            query_vector = embeddings.embed_query(short_desc)
+        except Exception as e:
+            logger.warning(f"Failed to embed description for {img_id}: {e}")
+            continue
+
+        cypher = """
+        CALL db.index.vector.queryNodes('vector', $top_k, $query_vector)
+        YIELD node, score
+        WHERE node.fileName = $fileName AND score > 0.3
+        RETURN node.id AS chunkId, score
+        ORDER BY score DESC
+        LIMIT $top_k
+        """
+        try:
+            results = execute_graph_query(
+                graph, cypher,
+                params={
+                    "query_vector": query_vector,
+                    "top_k": top_k,
+                    "fileName": file_name
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Vector search failed for {img_id}: {e}")
+            continue
+
+        if not results:
+            continue
+
+        for match in results:
+            chunk_id = match["chunkId"]
+            try:
+                execute_graph_query(
+                    graph,
+                    "MATCH (img:ExerciseImage {id: $imgId}), (c:Chunk {id: $chunkId}) "
+                    "MERGE (img)-[:ILLUSTRATES]->(c)",
+                    params={"imgId": img_id, "chunkId": chunk_id}
+                )
+                linked_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to link {img_id} -> {chunk_id}: {e}")
+
+    logger.info(f"Semantic linking completed: {linked_count} relationships created for {file_name}")
+    return linked_count
 
 
 def search_images_by_symptom(

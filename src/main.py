@@ -742,22 +742,10 @@ async def processing_source(credentials, params, pages, merged_file_path=None, i
   uri_latency["total_chunks"] = total_chunks
 
   try:
-    link_result = graph.query(
-      """
-      MATCH (img:ExerciseImage {fileName: $fn})
-      MATCH (c:Chunk {fileName: $fn})
-      WHERE c.position IS NOT NULL
-      WITH img, c
-      ORDER BY ABS(c.position - img.paragraphIndex) ASC
-      WITH img, collect(c)[0] AS nearest_chunk
-      MERGE (img)-[:ILLUSTRATES]->(nearest_chunk)
-      RETURN count(*) AS linked
-      """,
-      {"fn": params.file_name},
-    )
-    linked_count = link_result[0]["linked"] if link_result else 0
+    from src.image_storage import link_images_to_chunks_semantic
+    linked_count = link_images_to_chunks_semantic(graph, params.file_name, top_k=3)
     if linked_count > 0:
-      logging.info(f"Linked {linked_count} ExerciseImage nodes to Chunks after chunk creation")
+      logging.info(f"Semantic linking: {linked_count} ExerciseImage-Chunk relationships created")
   except Exception as e:
     logging.warning(f"Failed to link images to chunks after chunk creation: {e}")
 

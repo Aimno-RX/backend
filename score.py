@@ -160,6 +160,16 @@ app.add_middleware(
 app.add_middleware(SessionMiddleware, secret_key=os.urandom(24))
 app.add_api_route("/health", health([healthy_condition, healthy]))
 
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+
+@app.get("/chat")
+async def chat_page():
+    from fastapi.responses import HTMLResponse
+    html_path = os.path.join(STATIC_DIR, "chatbot.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
 
 @app.get("/api/images/{file_name}/{image_id}")
 async def serve_image(file_name: str, image_id: str):

@@ -340,10 +340,8 @@ def link_images_to_chunks(
     MATCH (img:ExerciseImage {id: data.imageId})
     MATCH (c:Chunk {fileName: data.fileName})
     WHERE c.position IS NOT NULL
-    WITH img, c, data
-    ORDER BY ABS(c.position - data.paragraphIndex) ASC
-    WITH img, collect(c)[0] AS nearest_chunk
-    MERGE (img)-[:ILLUSTRATES]->(nearest_chunk)
+      AND ABS(c.position - data.paragraphIndex) <= 30
+    MERGE (img)-[:ILLUSTRATES]->(c)
     """
 
     try:

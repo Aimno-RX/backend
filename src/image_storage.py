@@ -351,7 +351,7 @@ def link_images_to_chunks(
         return 0
 
 
-def link_images_to_chunks_semantic(graph, file_name: str, top_k: int = 3) -> int:
+def link_images_to_chunks_semantic(graph, file_name: str, top_k: int = 5) -> int:
     """
     基于语义相似度将 ExerciseImage 节点与 Chunk 节点关联。
 
@@ -376,7 +376,7 @@ def link_images_to_chunks_semantic(graph, file_name: str, top_k: int = 3) -> int
             graph,
             "MATCH (img:ExerciseImage {fileName: $fileName}) "
             "WHERE img.description IS NOT NULL AND img.description <> '' "
-            "RETURN img.id AS id, img.description AS description",
+            "RETURN img.id AS id, img.description AS description, img.paragraphIndex AS paragraphIndex",
             params={"fileName": file_name}
         )
     except Exception as e:
@@ -401,6 +401,7 @@ def link_images_to_chunks_semantic(graph, file_name: str, top_k: int = 3) -> int
     for img_node in existing_images:
         img_id = img_node["id"]
         description = img_node["description"]
+        para_idx = img_node.get("paragraphIndex", 0)
 
         short_desc = description[:500]
         try:
@@ -410,11 +411,14 @@ def link_images_to_chunks_semantic(graph, file_name: str, top_k: int = 3) -> int
             continue
 
         cypher = """
-        CALL db.index.vector.queryNodes('vector', $top_k, $query_vector)
+        CALL db.index.vector.queryNodes('vector', $search_k, $query_vector)
         YIELD node, score
         WHERE node.fileName = $fileName AND score > 0.3
-        RETURN node.id AS chunkId, score
-        ORDER BY score DESC
+        WITH node, score, ABS(node.position - $paragraphIndex) AS posDist
+        WITH node, score, posDist,
+             score * 0.7 + (1.0 / (1.0 + posDist / 10.0)) * 0.3 AS combinedScore
+        ORDER BY combinedScore DESC
+        RETURN node.id AS chunkId, score, posDist, combinedScore
         LIMIT $top_k
         """
         try:
@@ -422,8 +426,10 @@ def link_images_to_chunks_semantic(graph, file_name: str, top_k: int = 3) -> int
                 graph, cypher,
                 params={
                     "query_vector": query_vector,
+                    "search_k": min(top_k * 10, 50),
                     "top_k": top_k,
-                    "fileName": file_name
+                    "fileName": file_name,
+                    "paragraphIndex": para_idx
                 }
             )
         except Exception as e:

@@ -55,6 +55,20 @@ MERGED_DIR = os.path.join(os.path.dirname(__file__), "merged_files")
 QUERY_LIBRARY_FILE = os.path.join(os.path.dirname(__file__), "query_library.json")
 IMAGE_STORAGE_DIR = os.getenv("IMAGE_STORAGE_DIR", "/data/images")
 
+# ============================================
+# Chat Bot 并发控制 (请求排队机制)
+# ============================================
+# CHAT_MAX_CONCURRENT: 同时处理的最大 chat_bot 请求数 (默认8)
+#   - 2 workers × 每worker 4个并发 = 8 个同时处理
+#   - 超出此数量的请求排队等待，而非直接断连
+# CHAT_QUEUE_TIMEOUT: 排队等待超时秒数 (默认120)
+#   - 等太久则返回提示，而不是无限挂起
+CHAT_MAX_CONCURRENT = int(os.getenv("CHAT_MAX_CONCURRENT", "8"))
+CHAT_QUEUE_TIMEOUT = int(os.getenv("CHAT_QUEUE_TIMEOUT", "120"))
+_chat_semaphore = asyncio.Semaphore(CHAT_MAX_CONCURRENT)
+_chat_active_count = 0
+_chat_total_queued = 0
+
 
 def load_query_library():
     if not os.path.exists(QUERY_LIBRARY_FILE):
@@ -518,35 +532,79 @@ async def chat_bot(
     mode=Form(None)
 ):
     """Run QA chat bot on the graph database."""
+    global _chat_active_count, _chat_total_queued
     logging.info(f"QA_RAG called at {datetime.now()}")
-    qa_rag_start_time = time.time()
-    try:
-        if mode == "graph":
-            graph = Neo4jGraph(url=credentials.uri, username=credentials.userName, password=credentials.password, database=credentials.database, sanitize=True, refresh_schema=True)
-        else:
-            graph = create_graph_database_connection(credentials)
-        
-        graphDb_data_Access = graphDBdataAccess(graph)
-        write_access = graphDb_data_Access.check_account_access(database=credentials.database)
-        result = await asyncio.to_thread(QA_RAG, graph=graph, model=model, question=question, document_names=document_names, session_id=session_id, mode=mode, write_access=write_access, email=credentials.email, uri=credentials.uri)
 
-        total_call_time = time.time() - qa_rag_start_time
-        logging.info(f"Total Response time is  {total_call_time:.2f} seconds")
-        result["info"]["response_time"] = round(total_call_time, 2)
-        
-        json_obj = {'api_name':'chat_bot','db_url':credentials.uri, 'userName':credentials.userName, 'database':credentials.database, 'question':question,'document_names':document_names,
-                             'session_id':session_id, 'mode':mode, 'logging_time': formatted_time(datetime.now(timezone.utc)), 'elapsed_api_time':f'{total_call_time:.2f}','email':credentials.email}
-        logger.log_struct(json_obj, "INFO")
-        
-        return create_api_response('Success',data=result)
-    except Exception as e:
-        job_status = "Failed"
-        message="Unable to get chat response"
-        error_message = str(e)
-        logging.exception(f'Exception in chat bot:{error_message}')
-        return create_api_response(job_status, message=message, error=error_message,data=mode)
-    finally:
-        gc.collect()
+    # ---- 排队等待 ----
+    queue_start = time.time()
+    _chat_total_queued += 1
+    queue_position = _chat_total_queued
+
+    try:
+        async with asyncio.wait_for(_chat_semaphore.acquire(), timeout=CHAT_QUEUE_TIMEOUT):
+            wait_time = time.time() - queue_start
+            _chat_active_count += 1
+            active = _chat_active_count
+
+            if wait_time > 0.5:
+                logging.info(f"Chat request queued: waited {wait_time:.1f}s, now processing (active={active})")
+            else:
+                logging.info(f"Chat request processing immediately (active={active})")
+
+            qa_rag_start_time = time.time()
+            try:
+                if mode == "graph":
+                    graph = Neo4jGraph(url=credentials.uri, username=credentials.userName, password=credentials.password, database=credentials.database, sanitize=True, refresh_schema=True)
+                else:
+                    graph = create_graph_database_connection(credentials)
+
+                graphDb_data_Access = graphDBdataAccess(graph)
+                write_access = graphDb_data_Access.check_account_access(database=credentials.database)
+                result = await asyncio.to_thread(QA_RAG, graph=graph, model=model, question=question, document_names=document_names, session_id=session_id, mode=mode, write_access=write_access, email=credentials.email, uri=credentials.uri)
+
+                total_call_time = time.time() - qa_rag_start_time
+                logging.info(f"Total Response time is  {total_call_time:.2f} seconds")
+                result["info"]["response_time"] = round(total_call_time, 2)
+                result["info"]["queue_wait_time"] = round(wait_time, 2)
+
+                json_obj = {'api_name':'chat_bot','db_url':credentials.uri, 'userName':credentials.userName, 'database':credentials.database, 'question':question,'document_names':document_names,
+                                     'session_id':session_id, 'mode':mode, 'logging_time': formatted_time(datetime.now(timezone.utc)), 'elapsed_api_time':f'{total_call_time:.2f}','email':credentials.email}
+                logger.log_struct(json_obj, "INFO")
+
+                return create_api_response('Success',data=result)
+            except Exception as e:
+                job_status = "Failed"
+                message="Unable to get chat response"
+                error_message = str(e)
+                logging.exception(f'Exception in chat bot:{error_message}')
+                return create_api_response(job_status, message=message, error=error_message,data=mode)
+            finally:
+                _chat_active_count -= 1
+                _chat_semaphore.release()
+                gc.collect()
+
+    except asyncio.TimeoutError:
+        wait_time = time.time() - queue_start
+        logging.warning(f"Chat request timed out in queue after {wait_time:.1f}s (active={_chat_active_count}, max={CHAT_MAX_CONCURRENT})")
+        return create_api_response(
+            'Failed',
+            message=f"Server is busy, please try again later. Waited {wait_time:.0f}s in queue.",
+            error="queue_timeout"
+        )
+
+@app.get("/chat_queue_status")
+async def chat_queue_status():
+    """Get current chat bot queue status (active requests, available slots)."""
+    active = _chat_active_count
+    max_concurrent = CHAT_MAX_CONCURRENT
+    available = max_concurrent - active
+    return {
+        "active_requests": active,
+        "max_concurrent": max_concurrent,
+        "available_slots": available,
+        "queue_timeout_seconds": CHAT_QUEUE_TIMEOUT,
+        "utilization_percent": round(active / max_concurrent * 100, 1) if max_concurrent > 0 else 0
+    }
 
 @app.post("/chunk_entities")
 async def chunk_entities(

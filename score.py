@@ -546,51 +546,11 @@ async def chat_bot(
     # ---- 排队等待 ----
     queue_start = time.time()
     _chat_total_queued += 1
-    queue_position = _chat_total_queued
+    sem = _get_chat_semaphore()
 
     try:
-        async with asyncio.wait_for(_get_chat_semaphore().acquire(), timeout=CHAT_QUEUE_TIMEOUT):
-            wait_time = time.time() - queue_start
-            _chat_active_count += 1
-            active = _chat_active_count
-
-            if wait_time > 0.5:
-                logging.info(f"Chat request queued: waited {wait_time:.1f}s, now processing (active={active})")
-            else:
-                logging.info(f"Chat request processing immediately (active={active})")
-
-            qa_rag_start_time = time.time()
-            try:
-                if mode == "graph":
-                    graph = Neo4jGraph(url=credentials.uri, username=credentials.userName, password=credentials.password, database=credentials.database, sanitize=True, refresh_schema=True)
-                else:
-                    graph = create_graph_database_connection(credentials)
-
-                graphDb_data_Access = graphDBdataAccess(graph)
-                write_access = graphDb_data_Access.check_account_access(database=credentials.database)
-                result = await asyncio.to_thread(QA_RAG, graph=graph, model=model, question=question, document_names=document_names, session_id=session_id, mode=mode, write_access=write_access, email=credentials.email, uri=credentials.uri)
-
-                total_call_time = time.time() - qa_rag_start_time
-                logging.info(f"Total Response time is  {total_call_time:.2f} seconds")
-                result["info"]["response_time"] = round(total_call_time, 2)
-                result["info"]["queue_wait_time"] = round(wait_time, 2)
-
-                json_obj = {'api_name':'chat_bot','db_url':credentials.uri, 'userName':credentials.userName, 'database':credentials.database, 'question':question,'document_names':document_names,
-                                     'session_id':session_id, 'mode':mode, 'logging_time': formatted_time(datetime.now(timezone.utc)), 'elapsed_api_time':f'{total_call_time:.2f}','email':credentials.email}
-                logger.log_struct(json_obj, "INFO")
-
-                return create_api_response('Success',data=result)
-            except Exception as e:
-                job_status = "Failed"
-                message="Unable to get chat response"
-                error_message = str(e)
-                logging.exception(f'Exception in chat bot:{error_message}')
-                return create_api_response(job_status, message=message, error=error_message,data=mode)
-            finally:
-                _chat_active_count -= 1
-                _get_chat_semaphore().release()
-                gc.collect()
-
+        # 等待获取信号量（排队），超时则返回 busy
+        await asyncio.wait_for(sem.acquire(), timeout=CHAT_QUEUE_TIMEOUT)
     except asyncio.TimeoutError:
         wait_time = time.time() - queue_start
         logging.warning(f"Chat request timed out in queue after {wait_time:.1f}s (active={_chat_active_count}, max={CHAT_MAX_CONCURRENT})")
@@ -599,6 +559,48 @@ async def chat_bot(
             message=f"Server is busy, please try again later. Waited {wait_time:.0f}s in queue.",
             error="queue_timeout"
         )
+
+    # 获得信号量，开始处理
+    wait_time = time.time() - queue_start
+    _chat_active_count += 1
+    active = _chat_active_count
+
+    if wait_time > 0.5:
+        logging.info(f"Chat request queued: waited {wait_time:.1f}s, now processing (active={active})")
+    else:
+        logging.info(f"Chat request processing immediately (active={active})")
+
+    qa_rag_start_time = time.time()
+    try:
+        if mode == "graph":
+            graph = Neo4jGraph(url=credentials.uri, username=credentials.userName, password=credentials.password, database=credentials.database, sanitize=True, refresh_schema=True)
+        else:
+            graph = create_graph_database_connection(credentials)
+
+        graphDb_data_Access = graphDBdataAccess(graph)
+        write_access = graphDb_data_Access.check_account_access(database=credentials.database)
+        result = await asyncio.to_thread(QA_RAG, graph=graph, model=model, question=question, document_names=document_names, session_id=session_id, mode=mode, write_access=write_access, email=credentials.email, uri=credentials.uri)
+
+        total_call_time = time.time() - qa_rag_start_time
+        logging.info(f"Total Response time is  {total_call_time:.2f} seconds")
+        result["info"]["response_time"] = round(total_call_time, 2)
+        result["info"]["queue_wait_time"] = round(wait_time, 2)
+
+        json_obj = {'api_name':'chat_bot','db_url':credentials.uri, 'userName':credentials.userName, 'database':credentials.database, 'question':question,'document_names':document_names,
+                             'session_id':session_id, 'mode':mode, 'logging_time': formatted_time(datetime.now(timezone.utc)), 'elapsed_api_time':f'{total_call_time:.2f}','email':credentials.email}
+        logger.log_struct(json_obj, "INFO")
+
+        return create_api_response('Success',data=result)
+    except Exception as e:
+        job_status = "Failed"
+        message="Unable to get chat response"
+        error_message = str(e)
+        logging.exception(f'Exception in chat bot:{error_message}')
+        return create_api_response(job_status, message=message, error=error_message,data=mode)
+    finally:
+        _chat_active_count -= 1
+        sem.release()
+        gc.collect()
 
 @app.get("/chat_queue_status")
 async def chat_queue_status():

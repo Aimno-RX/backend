@@ -65,9 +65,17 @@ IMAGE_STORAGE_DIR = os.getenv("IMAGE_STORAGE_DIR", "/data/images")
 #   - 等太久则返回提示，而不是无限挂起
 CHAT_MAX_CONCURRENT = int(os.getenv("CHAT_MAX_CONCURRENT", "8"))
 CHAT_QUEUE_TIMEOUT = int(os.getenv("CHAT_QUEUE_TIMEOUT", "120"))
-_chat_semaphore = asyncio.Semaphore(CHAT_MAX_CONCURRENT)
+_chat_semaphore = None  # 懒初始化，在第一次请求时创建（避免事件循环问题）
 _chat_active_count = 0
 _chat_total_queued = 0
+
+
+def _get_chat_semaphore():
+    """懒初始化 Semaphore，确保在正确的事件循环中创建"""
+    global _chat_semaphore
+    if _chat_semaphore is None:
+        _chat_semaphore = asyncio.Semaphore(CHAT_MAX_CONCURRENT)
+    return _chat_semaphore
 
 
 def load_query_library():
@@ -541,7 +549,7 @@ async def chat_bot(
     queue_position = _chat_total_queued
 
     try:
-        async with asyncio.wait_for(_chat_semaphore.acquire(), timeout=CHAT_QUEUE_TIMEOUT):
+        async with asyncio.wait_for(_get_chat_semaphore().acquire(), timeout=CHAT_QUEUE_TIMEOUT):
             wait_time = time.time() - queue_start
             _chat_active_count += 1
             active = _chat_active_count
@@ -580,7 +588,7 @@ async def chat_bot(
                 return create_api_response(job_status, message=message, error=error_message,data=mode)
             finally:
                 _chat_active_count -= 1
-                _chat_semaphore.release()
+                _get_chat_semaphore().release()
                 gc.collect()
 
     except asyncio.TimeoutError:

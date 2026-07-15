@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Large files
+bge-small-zh-v1.5/
+*.bin
+*.model
+*.vec
+
+# Backup
+*_backup_*
+src_backup_*
+
+# Temp
+*.txt
+--*
+dockerfile
+backend-app:*
+
+# Logs & Env
+*.log
+.env
+neo4j-data/
+
+# Scripts
+deploy_fix.sh
+fix_*.py
+update_qa.py
+*_import_fix.py
+constraints.txt
+*.docx

@@ -1,0 +1,46 @@
+# Python 虚拟环境（体积巨大，不应进入镜像）
+venv/
+venv_medical/
+.venv/
+
+# Python 字节码缓存
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# 本地模型文件（通过 volume 挂载，无需打包进镜像）
+# 注意：Dockerfile 内部会在构建时下载，此处排除宿主机副本
+# 若要完全依赖宿主机模型（加速构建），取消下方注释：
+# local_model/
+
+# 上传缓存目录（通过 volume 挂载）
+chunks/
+merged_files/
+
+# Git
+.git/
+.gitignore
+
+# 文档和脚本
+*.md
+*.bat
+*.ps1
+*.txt.bak
+
+# 测试文件
+test_*.py
+locustperf.py
+Performance_test.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 日志
+*.log
+
+# 环境变量文件（通过 env_file/environment 注入，不打包进镜像）
+.env
+.env.*

@@ -23,6 +23,13 @@ backend-app:*
 *.log
 .env
 neo4j-data/
+session-*.md
+session_summary_*.md
+
+# Extracted images & large files
+extracted_images/
+extracted_images_v2/
+local_model/
 
 # Scripts
 deploy_fix.sh

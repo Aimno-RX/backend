@@ -161,7 +161,7 @@ def get_rag_chain(llm, system_template=CHAT_SYSTEM_TEMPLATE):
         logging.error(f"Error creating RAG chain: {e}")
         raise
 
-def format_documents(documents, model,chat_mode_settings):
+def format_documents(documents, model,chat_mode_settings, max_images=9):
     prompt_token_cutoff = 4
     for model_names, value in CHAT_TOKEN_CUT_OFF.items():
         if model in model_names:
@@ -175,6 +175,7 @@ def format_documents(documents, model,chat_mode_settings):
     sources = set()
     entities = dict()
     global_communities = list()
+    all_images = list()
 
 
     for doc in sorted_documents:
@@ -196,6 +197,11 @@ def format_documents(documents, model,chat_mode_settings):
                 new_entries = [entry for entry in doc.metadata["communitydetails"] if entry['id'] not in existing_ids]
                 global_communities.extend(new_entries)
 
+            if 'images' in doc.metadata:
+                for img in doc.metadata['images']:
+                    if img and img.get('imageUrl') not in [i.get('imageUrl') for i in all_images]:
+                        all_images.append(img)
+
             formatted_doc = (
                 "Document start\n"
                 f"This Document belongs to the source {source}\n"
@@ -207,13 +213,30 @@ def format_documents(documents, model,chat_mode_settings):
         except Exception as e:
             logging.error(f"Error formatting document: {e}")
     
-    return "\n\n".join(formatted_docs), sources,entities,global_communities
+    # Get max totalImgCount across all docs
+    max_total_img = 0
+    for doc in sorted_documents:
+        tic = doc.metadata.get('totalImgCount', 0)
+        if tic > max_total_img:
+            max_total_img = tic
+    
+    all_images = all_images[:max_images]
+    return "\n\n".join(formatted_docs), sources,entities,global_communities, all_images, max_total_img
+
+def _is_asking_more_images(question):
+    """Check if user wants to see more images."""
+    if not question:
+        return False
+    q = question.lower()
+    keywords = ['更多图片', '更多图', '展示更多', '看看更多', '还有哪些图', '其他图片', '别的图', '全部图片', '所有图片', 'more image', 'show more']
+    return any(kw in q for kw in keywords)
 
 def process_documents(docs, question, messages, llm, model,chat_mode_settings):
     start_time = time.time()
     
     try:
-        formatted_docs, sources, entitydetails, communities = format_documents(docs, model,chat_mode_settings)
+        max_imgs = 9 if _is_asking_more_images(question) else 3
+        formatted_docs, sources, entitydetails, communities, images, total_img_count = format_documents(docs, model,chat_mode_settings, max_imgs)
         
         rag_chain = get_rag_chain(llm=llm)
         
@@ -223,7 +246,7 @@ def process_documents(docs, question, messages, llm, model,chat_mode_settings):
             "input": question
         })
 
-        result = {'sources': list(), 'nodedetails': dict(), 'entities': dict()}
+        result = {'sources': list(), 'nodedetails': dict(), 'entities': dict(), 'images': list()}
         node_details = {"chunkdetails":list(),"entitydetails":list(),"communitydetails":list()}
         entities = {'entityids':list(),"relationshipids":list()}
 
@@ -240,6 +263,7 @@ def process_documents(docs, question, messages, llm, model,chat_mode_settings):
 
         result["nodedetails"] = node_details
         result["entities"] = entities
+        result["images"] = images
 
         content = ai_response.content
         total_tokens = get_total_tokens(ai_response, llm)
@@ -251,7 +275,7 @@ def process_documents(docs, question, messages, llm, model,chat_mode_settings):
         logging.error(f"Error processing documents: {e}")
         raise
     
-    return content, result, total_tokens, formatted_docs
+    return content, result, total_tokens, formatted_docs, total_img_count
 
 def retrieve_documents(doc_retriever, messages):
 
@@ -436,7 +460,7 @@ def process_chat_response(messages, history, question, model, graph, document_na
         docs,transformed_question = retrieve_documents(doc_retriever, messages)  
 
         if docs:
-            content, result, total_tokens,formatted_docs = process_documents(docs, question, messages, llm, model, chat_mode_settings)
+            content, result, total_tokens,formatted_docs, total_img_count = process_documents(docs, question, messages, llm, model, chat_mode_settings)
             if get_value_from_env("TRACK_TOKEN_USAGE", "false", "bool"):
                 latest_token = track_token_usage(email=email, uri=uri, usage=total_tokens, last_used_model=model)
                 logging.info(f"Total token usage {latest_token} for user {email} ")
@@ -445,6 +469,11 @@ def process_chat_response(messages, history, question, model, graph, document_na
             result = {"sources": list(), "nodedetails": list(), "entities": list()}
             total_tokens = 0
             formatted_docs = ""
+            total_img_count = 0
+        
+        # Add hint if there are more images
+        if total_img_count > 3:
+            content += "\n\n（以上展示了" + str(len(result.get("images", []))) + "张相关图片。如需查看该主题的更多图片，请告诉我“我想看更多图片”或“展示更多相关图片”）"
         
         ai_response = AIMessage(content=content)
         messages.append(ai_response)
@@ -467,6 +496,7 @@ def process_chat_response(messages, history, question, model, graph, document_na
                 "mode": chat_mode_settings["mode"],
                 "entities": result["entities"],
                 "metric_details": metric_details,
+                "images": result.get("images", []),
             },
             
             "user": "chatbot"

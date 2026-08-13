@@ -254,7 +254,7 @@ CHAT_TOKEN_CUT_OFF = {
 
 ### CHAT TEMPLATES 
 CHAT_SYSTEM_TEMPLATE = """
-You are an AI-powered question-answering agent. Your task is to provide accurate and comprehensive responses to user queries based on the given context, chat history, and available resources.
+You are an AI-powered question-answering agent specializing in rehabilitation exercises and health guidance. Your task is to provide accurate and comprehensive responses to user queries based on the given context, chat history, and available resources.
 
 ### Response Guidelines:
 1. **Direct Answers**: Provide clear and thorough answers to the user's queries without headers unless requested. Avoid speculative responses.
@@ -267,6 +267,8 @@ You are an AI-powered question-answering agent. Your task is to provide accurate
 8. **Error Handling**: If a query is ambiguous or unclear, ask for clarification rather than providing a potentially incorrect answer.
 9. **Fallback Options**: If the required information is not available in the provided context, provide a polite and helpful response. Example: "I don't have that information right now." or "I'm sorry, but I don't have that information. Is there something else I can help with?"
 10. **Context Availability**: If the context is empty, do not provide answers based solely on internal knowledge. Instead, respond appropriately by indicating the lack of information.
+11. **Exercise Images**: When the context contains [Image: ...] tags or image URLs, always reference them in your response. For example: "参考下图的练习动作" or "请看下面的动作示范图片". Describe the exercise clearly and mention the image URL so the frontend can display it.
+12. **Rehabilitation Guidance**: When answering about exercises, include: starting posture (起始姿势), movement description (动作描述), target body parts (目标部位), repetitions (重复次数), and precautions (注意事项) if available in the context.
 
 
 **IMPORTANT** : DO NOT ANSWER FROM YOUR KNOWLEDGE BASE USE THE BELOW CONTEXT
@@ -307,12 +309,26 @@ WITH d,
      collect(distinct {chunk: chunk, score: score}) AS chunks, 
      avg(score) AS avg_score
 
-WITH d, avg_score, 
-     [c IN chunks | c.chunk.text] AS texts, 
-     [c IN chunks | {id: c.chunk.id, score: c.score}] AS chunkdetails
+// Collect images belonging to the same document (limited)
+WITH d, avg_score, chunks
+OPTIONAL MATCH (img:ExerciseImage)-[:BELONGS_TO]->(d)
+WITH d, avg_score, chunks, collect(DISTINCT img) AS allImages
+WITH d, avg_score, chunks, allImages, size(allImages) AS totalImgCount
+WITH d, avg_score, chunks, [img IN allImages WHERE img IS NOT NULL][..9] AS images, totalImgCount
 
-WITH d, avg_score, chunkdetails, 
-     apoc.text.join(texts, "\n----\n") AS text
+WITH d, avg_score, chunks, totalImgCount,
+     [c IN chunks | c.chunk.text] AS texts, 
+     [c IN chunks | {id: c.chunk.id, score: c.score}] AS chunkdetails,
+     [img IN images WHERE img IS NOT NULL AND img.imageUrl IS NOT NULL |
+         "[Image: " + coalesce(img.exerciseName, "") + " | " + coalesce(img.imageUrl, "") + "]"
+     ] AS imageTexts,
+     [img IN images WHERE img IS NOT NULL |
+         {imageUrl: img.imageUrl, exerciseName: img.exerciseName}
+     ] AS imageDetails
+
+WITH d, avg_score, chunkdetails, imageDetails, totalImgCount,
+     apoc.text.join(texts, "\n----\n") AS text,
+     imageTexts
 
 RETURN text, 
        avg_score AS score, 
@@ -321,7 +337,9 @@ RETURN text,
                              ELSE d.url 
                        END, 
                        d.fileName), 
-        chunkdetails: chunkdetails} AS metadata
+        chunkdetails: chunkdetails,
+        images: imageDetails,
+        totalImgCount: totalImgCount} AS metadata
 """ 
 
 ### Vector graph search 
@@ -445,8 +463,14 @@ VECTOR_GRAPH_SEARCH_QUERY_SUFFIX = """
        } AS nodes,
        entities
 }
-// Generate metadata and text components for chunks, nodes, and relationships
-WITH d, avg_score,
+// Collect images belonging to the same document (limited)
+WITH d, avg_score, chunks, rels, nodes, entities
+OPTIONAL MATCH (img:ExerciseImage)-[:BELONGS_TO]->(d)
+WITH d, avg_score, chunks, rels, nodes, entities, collect(DISTINCT img) AS allImages
+WITH d, avg_score, chunks, rels, nodes, entities, allImages, size(allImages) AS totalImgCount
+WITH d, avg_score, chunks, rels, nodes, entities, totalImgCount, [img IN allImages WHERE img IS NOT NULL][..9] AS images
+// Generate metadata and text components for chunks, nodes, relationships, and images
+WITH d, avg_score, totalImgCount,
     [c IN chunks | c.chunk.text] AS texts,
     [c IN chunks | {id: c.chunk.id, score: c.score}] AS chunkdetails,
     [n IN nodes | elementId(n)] AS entityIds,
@@ -476,12 +500,19 @@ WITH d, avg_score,
             ""
         )
     ]) AS relTexts,
+    [img IN images WHERE img IS NOT NULL AND img.imageUrl IS NOT NULL |
+        "[Image: " + coalesce(img.exerciseName, "") + " | " + coalesce(img.imageUrl, "") + "]"
+    ] AS imageTexts,
+    [img IN images WHERE img IS NOT NULL |
+        {imageUrl: img.imageUrl, exerciseName: img.exerciseName}
+    ] AS imageDetails,
     entities
 // Combine texts into response text
-WITH d, avg_score, chunkdetails, entityIds, relIds,
+WITH d, avg_score, chunkdetails, entityIds, relIds, imageDetails, totalImgCount,
     "Text Content:\n" + apoc.text.join(texts, "\n----\n") +
     "\n----\nEntities:\n" + apoc.text.join(nodeTexts, "\n") +
-    "\n----\nRelationships:\n" + apoc.text.join(relTexts, "\n") AS text,
+    "\n----\nRelationships:\n" + apoc.text.join(relTexts, "\n") +
+    (CASE WHEN size(imageTexts) > 0 THEN "\n----\nImages:\n" + apoc.text.join(imageTexts, "\n") ELSE "" END) AS text,
     entities
 RETURN
    text,
@@ -493,7 +524,9 @@ RETURN
        entities : {
            entityids: entityIds,
            relationshipids: relIds
-       }
+       },
+       images: imageDetails,
+       totalImgCount: totalImgCount
    } AS metadata
 """
 
